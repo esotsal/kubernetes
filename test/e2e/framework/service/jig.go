@@ -20,9 +20,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/onsi/ginkgo/v2"
@@ -31,17 +33,13 @@ import (
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	utilnet "k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/apimachinery/pkg/watch"
 	clientset "k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/cache"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2enode "k8s.io/kubernetes/test/e2e/framework/node"
 	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
@@ -57,6 +55,33 @@ var NodePortRange = utilnet.PortRange{Base: 30000, Size: 2768}
 
 // It is copied from "k8s.io/kubernetes/pkg/registry/core/service/portallocator"
 var errAllocated = errors.New("provided port is already allocated")
+
+// staticPortRange implements port allocation model described here
+// https://github.com/kubernetes/enhancements/tree/master/keps/sig-network/3668-reserved-service-nodeport-range
+type staticPortRange struct {
+	sync.Mutex
+	baseport      int32
+	length        int32
+	reservedPorts sets.Set[int32]
+}
+
+func calculateRange(size int32) int32 {
+	var minPort int32 = 16
+	var step int32 = 32
+	var maxPort int32 = 128
+	return min(max(minPort, size/step), maxPort)
+}
+
+var staticPortAllocator *staticPortRange
+
+// Initialize only once per test
+func init() {
+	staticPortAllocator = &staticPortRange{
+		baseport:      int32(NodePortRange.Base),
+		length:        calculateRange(int32(NodePortRange.Size)),
+		reservedPorts: sets.New[int32](),
+	}
+}
 
 // TestJig is a test jig to help service testing.
 type TestJig struct {
@@ -80,6 +105,73 @@ func NewTestJig(client clientset.Interface, namespace, name string) *TestJig {
 	j.Labels = map[string]string{"testid": j.ID}
 
 	return j
+}
+
+// reservePort reserves the port provided as input.
+// If an invalid port was provided or if the port is already reserved, it returns false
+func (s *staticPortRange) reservePort(port int32) bool {
+	s.Lock()
+	defer s.Unlock()
+	if port < s.baseport || port > s.baseport+s.length || s.reservedPorts.Has(port) {
+		return false
+	}
+	s.reservedPorts.Insert(port)
+	return true
+}
+
+// getUnusedPort returns a free port from the range and returns its number and nil value
+// the port is not allocated so the consumer should allocate it explicitly calling allocatePort()
+// if none is available then it returns -1 and error
+func (s *staticPortRange) getUnusedPort() (int32, error) {
+	s.Lock()
+	defer s.Unlock()
+	// start in a random offset
+	start := rand.Int31n(s.length)
+	for i := int32(0); i < s.length; i++ {
+		port := s.baseport + (start+i)%(s.length)
+		if !s.reservedPorts.Has(port) {
+			return port, nil
+		}
+	}
+	return -1, fmt.Errorf("no free ports were found")
+}
+
+// releasePort releases the port passed as an argument
+func (s *staticPortRange) releasePort(port int32) {
+	s.Lock()
+	defer s.Unlock()
+	s.reservedPorts.Delete(port)
+}
+
+// GetUnusedStaticNodePort returns a free port in static range and a nil value
+// If no port in static range is available it returns -1 and an error value
+// Note that it is not guaranteed that the returned port is actually available on the apiserver;
+// You must allocate a port, then attempt to create the service, then call
+// ReserveStaticNodePort.
+func GetUnusedStaticNodePort() (int32, error) {
+	return staticPortAllocator.getUnusedPort()
+}
+
+// ReserveStaticNodePort reserves the port provided as input. It is guaranteed
+// that no other test will receive this port from GetUnusedStaticNodePort until
+// after you call ReleaseStaticNodePort.
+//
+// port must have been previously allocated by GetUnusedStaticNodePort, and
+// then successfully used as a NodePort or HealthCheckNodePort when creating
+// a service. Trying to reserve a port that was not allocated by
+// GetUnusedStaticNodePort, or reserving it before creating the associated service
+// may cause other e2e tests to fail.
+//
+// If an invalid port was provided or if the port is already reserved, it returns false
+func ReserveStaticNodePort(port int32) bool {
+	return staticPortAllocator.reservePort(port)
+}
+
+// ReleaseStaticNodePort releases the specified port.
+// The corresponding service should have already been deleted, to ensure that the
+// port allocator doesn't try to reuse it before the apiserver considers it available.
+func ReleaseStaticNodePort(port int32) {
+	staticPortAllocator.releasePort(port)
 }
 
 // newServiceTemplate returns the default v1.Service template for this j, but
@@ -308,42 +400,47 @@ func (j *TestJig) GetEndpointNodeNames(ctx context.Context) (sets.String, error)
 	if err != nil {
 		return nil, err
 	}
-	endpoints, err := j.Client.CoreV1().Endpoints(j.Namespace).Get(ctx, j.Name, metav1.GetOptions{})
+	slices, err := j.Client.DiscoveryV1().EndpointSlices(j.Namespace).List(ctx, metav1.ListOptions{LabelSelector: discoveryv1.LabelServiceName + "=" + j.Name})
 	if err != nil {
-		return nil, fmt.Errorf("get endpoints for service %s/%s failed (%s)", j.Namespace, j.Name, err)
-	}
-	if len(endpoints.Subsets) == 0 {
-		return nil, fmt.Errorf("endpoint has no subsets, cannot determine node addresses")
+		return nil, fmt.Errorf("list endpointslices for service %s/%s failed (%w)", j.Namespace, j.Name, err)
 	}
 	epNodes := sets.NewString()
-	for _, ss := range endpoints.Subsets {
-		for _, e := range ss.Addresses {
-			if e.NodeName != nil {
-				epNodes.Insert(*e.NodeName)
+	for _, slice := range slices.Items {
+		for _, ep := range slice.Endpoints {
+			if ep.NodeName != nil {
+				epNodes.Insert(*ep.NodeName)
 			}
 		}
+	}
+	if len(epNodes) == 0 {
+		return nil, fmt.Errorf("EndpointSlice has no endpoints, cannot determine node addresses")
 	}
 	return epNodes, nil
 }
 
-// WaitForEndpointOnNode waits for a service endpoint on the given node.
+// WaitForEndpointOnNode waits for a service endpoint on the given node (which must be the service's only endpoint).
 func (j *TestJig) WaitForEndpointOnNode(ctx context.Context, nodeName string) error {
 	return wait.PollUntilContextTimeout(ctx, framework.Poll, KubeProxyLagTimeout, true, func(ctx context.Context) (bool, error) {
-		endpoints, err := j.Client.CoreV1().Endpoints(j.Namespace).Get(ctx, j.Name, metav1.GetOptions{})
+		slices, err := j.Client.DiscoveryV1().EndpointSlices(j.Namespace).List(ctx, metav1.ListOptions{LabelSelector: "kubernetes.io/service-name=" + j.Name})
 		if err != nil {
-			framework.Logf("Get endpoints for service %s/%s failed (%s)", j.Namespace, j.Name, err)
+			framework.Logf("List endpointslices for service %s/%s failed (%s)", j.Namespace, j.Name, err)
 			return false, nil
 		}
-		if len(endpoints.Subsets) == 0 {
-			framework.Logf("Expect endpoints with subsets, got none.")
+		if len(slices.Items) == 0 {
+			framework.Logf("Expected 1 EndpointSlice for service %s/%s, got 0", j.Namespace, j.Name)
 			return false, nil
 		}
-		// TODO: Handle multiple endpoints
-		if len(endpoints.Subsets[0].Addresses) == 0 {
+		slice := slices.Items[0]
+		if len(slice.Endpoints) == 0 {
+			framework.Logf("Expected EndpointSlice with Endpoints, got none.")
+			return false, nil
+		}
+		endpoint := slice.Endpoints[0]
+		if len(endpoint.Addresses) == 0 || (endpoint.Conditions.Ready != nil && !*endpoint.Conditions.Ready) {
 			framework.Logf("Expected Ready endpoints - found none")
 			return false, nil
 		}
-		epHostName := *endpoints.Subsets[0].Addresses[0].NodeName
+		epHostName := *endpoint.NodeName
 		framework.Logf("Pod for service %s/%s is on node %s", j.Namespace, j.Name, epHostName)
 		if epHostName != nodeName {
 			framework.Logf("Found endpoint on wrong node, expected %v, got %v", nodeName, epHostName)
@@ -355,91 +452,18 @@ func (j *TestJig) WaitForEndpointOnNode(ctx context.Context, nodeName string) er
 
 // waitForAvailableEndpoint waits for at least 1 endpoint to be available till timeout
 func (j *TestJig) waitForAvailableEndpoint(ctx context.Context, timeout time.Duration) error {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	//Wait for endpoints to be created, this may take longer time if service backing pods are taking longer time to run
-	endpointSelector := fields.OneTermEqualSelector("metadata.name", j.Name)
-	endpointAvailable := false
-	endpointSliceAvailable := false
-
-	var controller cache.Controller
-	_, controller = cache.NewInformer(
-		&cache.ListWatch{
-			ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
-				options.FieldSelector = endpointSelector.String()
-				obj, err := j.Client.CoreV1().Endpoints(j.Namespace).List(ctx, options)
-				return runtime.Object(obj), err
-			},
-			WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
-				options.FieldSelector = endpointSelector.String()
-				return j.Client.CoreV1().Endpoints(j.Namespace).Watch(ctx, options)
-			},
-		},
-		&v1.Endpoints{},
-		0,
-		cache.ResourceEventHandlerFuncs{
-			AddFunc: func(obj interface{}) {
-				if e, ok := obj.(*v1.Endpoints); ok {
-					if len(e.Subsets) > 0 && len(e.Subsets[0].Addresses) > 0 {
-						endpointAvailable = true
-					}
-				}
-			},
-			UpdateFunc: func(old, cur interface{}) {
-				if e, ok := cur.(*v1.Endpoints); ok {
-					if len(e.Subsets) > 0 && len(e.Subsets[0].Addresses) > 0 {
-						endpointAvailable = true
-					}
-				}
-			},
-		},
-	)
-
-	go controller.Run(ctx.Done())
-
-	var esController cache.Controller
-	_, esController = cache.NewInformer(
-		&cache.ListWatch{
-			ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
-				options.LabelSelector = "kubernetes.io/service-name=" + j.Name
-				obj, err := j.Client.DiscoveryV1().EndpointSlices(j.Namespace).List(ctx, options)
-				return runtime.Object(obj), err
-			},
-			WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
-				options.LabelSelector = "kubernetes.io/service-name=" + j.Name
-				return j.Client.DiscoveryV1().EndpointSlices(j.Namespace).Watch(ctx, options)
-			},
-		},
-		&discoveryv1.EndpointSlice{},
-		0,
-		cache.ResourceEventHandlerFuncs{
-			AddFunc: func(obj interface{}) {
-				if es, ok := obj.(*discoveryv1.EndpointSlice); ok {
-					// TODO: currently we only consider addresses in 1 slice, but services with
-					// a large number of endpoints (>1000) may have multiple slices. Some slices
-					// with only a few addresses. We should check the addresses in all slices.
-					if len(es.Endpoints) > 0 && len(es.Endpoints[0].Addresses) > 0 {
-						endpointSliceAvailable = true
-					}
-				}
-			},
-			UpdateFunc: func(old, cur interface{}) {
-				if es, ok := cur.(*discoveryv1.EndpointSlice); ok {
-					// TODO: currently we only consider addresses in 1 slice, but services with
-					// a large number of endpoints (>1000) may have multiple slices. Some slices
-					// with only a few addresses. We should check the addresses in all slices.
-					if len(es.Endpoints) > 0 && len(es.Endpoints[0].Addresses) > 0 {
-						endpointSliceAvailable = true
-					}
-				}
-			},
-		},
-	)
-
-	go esController.Run(ctx.Done())
-
-	err := wait.PollUntilContextCancel(ctx, 1*time.Second, false, func(ctx context.Context) (bool, error) {
-		return endpointAvailable && endpointSliceAvailable, nil
+	err := wait.PollUntilContextTimeout(ctx, framework.Poll, timeout, true, func(ctx context.Context) (bool, error) {
+		slices, err := j.Client.DiscoveryV1().EndpointSlices(j.Namespace).List(ctx, metav1.ListOptions{LabelSelector: "kubernetes.io/service-name=" + j.Name})
+		if err != nil || len(slices.Items) == 0 {
+			// Retry
+			return false, nil
+		}
+		for _, es := range slices.Items {
+			if len(es.Endpoints) > 0 && len(es.Endpoints[0].Addresses) > 0 {
+				return true, nil
+			}
+		}
+		return false, nil
 	})
 	if err != nil {
 		return fmt.Errorf("no subset of available IP address found for the endpoint %s within timeout %v", j.Name, timeout)

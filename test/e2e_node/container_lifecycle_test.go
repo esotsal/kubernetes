@@ -29,9 +29,9 @@ import (
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
 	admissionapi "k8s.io/pod-security-admission/api"
 
+	"k8s.io/kubernetes/test/e2e/feature"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
-	"k8s.io/kubernetes/test/e2e/nodefeature"
 	imageutils "k8s.io/kubernetes/test/utils/image"
 	"k8s.io/utils/ptr"
 )
@@ -1621,7 +1621,7 @@ var _ = SIGDescribe(framework.WithSerial(), "Containers Lifecycle", func() {
 	})
 })
 
-var _ = SIGDescribe(nodefeature.SidecarContainers, "Containers Lifecycle", func() {
+var _ = SIGDescribe(feature.SidecarContainers, "Containers Lifecycle", func() {
 	f := framework.NewDefaultFramework("containers-lifecycle-test")
 	addAfterEachForCleaningUpPods(f)
 	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged
@@ -4389,20 +4389,20 @@ var _ = SIGDescribe(nodefeature.SidecarContainers, "Containers Lifecycle", func(
 				const simulToleration = 500 // milliseconds
 				// should all end together since they loop infinitely and exceed their grace period
 				gomega.Expect(ps1Last-ps2Last).To(gomega.BeNumerically("~", 0, simulToleration),
-					fmt.Sprintf("expected PostStart 1 & PostStart 2 to be killed at the same time, got %s", results))
+					fmt.Sprintf("expected PreStop 1 & PreStop 2 to be killed at the same time, got %s", results))
 				gomega.Expect(ps1Last-ps3Last).To(gomega.BeNumerically("~", 0, simulToleration),
-					fmt.Sprintf("expected PostStart 1 & PostStart 3 to be killed at the same time, got %s", results))
+					fmt.Sprintf("expected PreStop 1 & PreStop 3 to be killed at the same time, got %s", results))
 				gomega.Expect(ps2Last-ps3Last).To(gomega.BeNumerically("~", 0, simulToleration),
-					fmt.Sprintf("expected PostStart 2 & PostStart 3 to be killed at the same time, got %s", results))
+					fmt.Sprintf("expected PreStop 2 & PreStop 3 to be killed at the same time, got %s", results))
 
 				// 30 seconds + 2 second minimum grace for the SIGKILL
 				const lifetimeToleration = 1000 // milliseconds
 				gomega.Expect(ps1Last-ps1).To(gomega.BeNumerically("~", 32000, lifetimeToleration),
-					fmt.Sprintf("expected PostStart 1 to live for ~32 seconds, got %s", results))
+					fmt.Sprintf("expected PreStop 1 to live for ~32 seconds, got %s", results))
 				gomega.Expect(ps2Last-ps2).To(gomega.BeNumerically("~", 32000, lifetimeToleration),
-					fmt.Sprintf("expected PostStart 2 to live for ~32 seconds, got %s", results))
+					fmt.Sprintf("expected PreStop 2 to live for ~32 seconds, got %s", results))
 				gomega.Expect(ps3Last-ps3).To(gomega.BeNumerically("~", 32000, lifetimeToleration),
-					fmt.Sprintf("expected PostStart 3 to live for ~32 seconds, got %s", results))
+					fmt.Sprintf("expected PreStop 3 to live for ~32 seconds, got %s", results))
 
 			})
 		})
@@ -4528,11 +4528,11 @@ var _ = SIGDescribe(nodefeature.SidecarContainers, "Containers Lifecycle", func(
 
 				const toleration = 500 // milliseconds
 				gomega.Expect(ps1-ps2).To(gomega.BeNumerically("~", 0, toleration),
-					fmt.Sprintf("expected PostStart 1 & PostStart 2 to start at the same time, got %s", results))
+					fmt.Sprintf("expected PreStop 1 & PreStop 2 to be killed at the same time, got %s", results))
 				gomega.Expect(ps1-ps3).To(gomega.BeNumerically("~", 0, toleration),
-					fmt.Sprintf("expected PostStart 1 & PostStart 3 to start at the same time, got %s", results))
+					fmt.Sprintf("expected PreStop 1 & PreStop 3 to be killed at the same time, got %s", results))
 				gomega.Expect(ps2-ps3).To(gomega.BeNumerically("~", 0, toleration),
-					fmt.Sprintf("expected PostStart 2 & PostStart 3 to start at the same time, got %s", results))
+					fmt.Sprintf("expected PreStop 2 & PreStop 3 to be killed at the same time, got %s", results))
 			})
 		})
 
@@ -5408,7 +5408,7 @@ var _ = SIGDescribe(nodefeature.SidecarContainers, "Containers Lifecycle", func(
 	})
 })
 
-var _ = SIGDescribe(nodefeature.SidecarContainers, framework.WithSerial(), "Containers Lifecycle", func() {
+var _ = SIGDescribe(feature.SidecarContainers, framework.WithSerial(), "Containers Lifecycle", func() {
 	f := framework.NewDefaultFramework("containers-lifecycle-test-serial")
 	addAfterEachForCleaningUpPods(f)
 	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged

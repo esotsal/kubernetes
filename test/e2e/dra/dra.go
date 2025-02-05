@@ -45,6 +45,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/dynamic-resource-allocation/resourceslice"
 	"k8s.io/klog/v2"
+	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/test/e2e/feature"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2edaemonset "k8s.io/kubernetes/test/e2e/framework/daemonset"
@@ -79,7 +80,7 @@ func perNode(maxAllocations int, nodes *Nodes) func() Resources {
 	}
 }
 
-var _ = framework.SIGDescribe("node")("DRA", feature.DynamicResourceAllocation, func() {
+var _ = framework.SIGDescribe("node")("DRA", feature.DynamicResourceAllocation, framework.WithFeatureGate(features.DynamicResourceAllocation), func() {
 	f := framework.NewDefaultFramework("dra")
 
 	// The driver containers have to run with sufficient privileges to
@@ -404,7 +405,7 @@ var _ = framework.SIGDescribe("node")("DRA", feature.DynamicResourceAllocation, 
 			}).WithTimeout(f.Timeouts.PodDelete).Should(gomega.HaveField("Status.Allocation", (*resourceapi.AllocationResult)(nil)))
 		})
 
-		f.It("must be possible for the driver to update the ResourceClaim.Status.Devices once allocated", feature.DRAResourceClaimDeviceStatus, func(ctx context.Context) {
+		f.It("must be possible for the driver to update the ResourceClaim.Status.Devices once allocated", feature.DRAResourceClaimDeviceStatus, framework.WithFeatureGate(features.DRAResourceClaimDeviceStatus), framework.WithFeatureGate(features.DynamicResourceAllocation), func(ctx context.Context) {
 			pod := b.podExternal()
 			claim := b.externalClaim()
 			b.create(ctx, claim, pod)
@@ -553,43 +554,6 @@ var _ = framework.SIGDescribe("node")("DRA", feature.DynamicResourceAllocation, 
 			wg.Wait()
 		})
 
-		f.It("supports sharing a claim sequentially", f.WithSlow(), func(ctx context.Context) {
-			var objects []klog.KMetadata
-			objects = append(objects, b.externalClaim())
-
-			// This test used to test usage of the claim by one pod
-			// at a time. After removing the "not sharable"
-			// feature, we have to create more pods than supported
-			// at the same time to get the same effect.
-			numPods := resourceapi.ResourceClaimReservedForMaxSize + 10
-			pods := make([]*v1.Pod, numPods)
-			for i := 0; i < numPods; i++ {
-				pod := b.podExternal()
-				pods[i] = pod
-				objects = append(objects, pod)
-			}
-
-			b.create(ctx, objects...)
-
-			// We don't know the order. All that matters is that all of them get scheduled eventually.
-			f.Timeouts.PodStartSlow *= time.Duration(numPods)
-			var wg sync.WaitGroup
-			wg.Add(numPods)
-			for i := 0; i < numPods; i++ {
-				pod := pods[i]
-				go func() {
-					defer ginkgo.GinkgoRecover()
-					defer wg.Done()
-					b.testPod(ctx, f.ClientSet, pod, expectedEnv...)
-					// We need to delete each running pod, otherwise the others cannot use the claim.
-					err := f.ClientSet.CoreV1().Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{})
-					framework.ExpectNoError(err, "delete pod")
-					framework.ExpectNoError(e2epod.WaitForPodNotFoundInNamespace(ctx, f.ClientSet, pod.Name, pod.Namespace, f.Timeouts.PodStartSlow))
-				}()
-			}
-			wg.Wait()
-		})
-
 		ginkgo.It("retries pod scheduling after creating device class", func(ctx context.Context) {
 			var objects []klog.KMetadata
 			pod, template := b.podInline()
@@ -666,7 +630,7 @@ var _ = framework.SIGDescribe("node")("DRA", feature.DynamicResourceAllocation, 
 	// The following tests only make sense when there is more than one node.
 	// They get skipped when there's only one node.
 	multiNodeTests := func() {
-		nodes := NewNodes(f, 2, 8)
+		nodes := NewNodes(f, 3, 8)
 
 		ginkgo.Context("with different ResourceSlices", func() {
 			firstDevice := "pre-defined-device-01"
@@ -789,6 +753,117 @@ var _ = framework.SIGDescribe("node")("DRA", feature.DynamicResourceAllocation, 
 				}
 			})
 		})
+
+		ginkgo.Context("with network-attached resources", func() {
+			driver := NewDriver(f, nodes, networkResources)
+			b := newBuilder(f, driver)
+
+			f.It("supports sharing a claim sequentially", f.WithSlow(), func(ctx context.Context) {
+				var objects []klog.KMetadata
+				objects = append(objects, b.externalClaim())
+
+				// This test used to test usage of the claim by one pod
+				// at a time. After removing the "not sharable"
+				// feature and bumping up the maximum number of
+				// consumers this is now a stress test which runs
+				// the maximum number of pods per claim in parallel.
+				// This only works on clusters with >= 3 nodes.
+				numMaxPods := resourceapi.ResourceClaimReservedForMaxSize
+				ginkgo.By(fmt.Sprintf("Creating %d pods sharing the same claim", numMaxPods))
+				pods := make([]*v1.Pod, numMaxPods)
+				for i := 0; i < numMaxPods; i++ {
+					pod := b.podExternal()
+					pods[i] = pod
+					objects = append(objects, pod)
+				}
+				b.create(ctx, objects...)
+
+				timeout := f.Timeouts.PodStartSlow * time.Duration(numMaxPods)
+				ensureDuration := f.Timeouts.PodStart // Don't check for too long, even if it is less precise.
+				podIsPending := gomega.HaveField("Spec.NodeName", gomega.BeEmpty())
+				waitForPodScheduled := func(pod *v1.Pod) {
+					ginkgo.GinkgoHelper()
+					gomega.Eventually(ctx, framework.GetObject(f.ClientSet.CoreV1().Pods(pod.Namespace).Get, pod.Name, metav1.GetOptions{})).
+						WithTimeout(timeout).
+						WithPolling(10*time.Second).
+						ShouldNot(podIsPending, "Pod should get scheduled.")
+				}
+				ensurePodNotScheduled := func(pod *v1.Pod) {
+					ginkgo.GinkgoHelper()
+					gomega.Consistently(ctx, framework.GetObject(f.ClientSet.CoreV1().Pods(pod.Namespace).Get, pod.Name, metav1.GetOptions{})).
+						WithTimeout(ensureDuration).
+						WithPolling(10*time.Second).
+						Should(podIsPending, "Pod should remain pending.")
+				}
+
+				// We don't know the order. All that matters is that all of them get scheduled eventually.
+				ginkgo.By(fmt.Sprintf("Waiting for %d pods to be scheduled", numMaxPods))
+				f.Timeouts.PodStartSlow *= time.Duration(numMaxPods)
+				var wg sync.WaitGroup
+				wg.Add(numMaxPods)
+				for i := 0; i < numMaxPods; i++ {
+					pod := pods[i]
+					go func() {
+						defer ginkgo.GinkgoRecover()
+						defer wg.Done()
+						waitForPodScheduled(pod)
+					}()
+				}
+				wg.Wait()
+
+				numMorePods := 10
+				ginkgo.By(fmt.Sprintf("Creating %d additional pods for the same claim", numMorePods))
+				morePods := make([]*v1.Pod, numMorePods)
+				objects = nil
+				for i := 0; i < numMorePods; i++ {
+					pod := b.podExternal()
+					morePods[i] = pod
+					objects = append(objects, pod)
+				}
+				b.create(ctx, objects...)
+
+				// None of the additional pods can run because of the ReservedFor limit.
+				ginkgo.By(fmt.Sprintf("Check for %s that the additional pods don't get scheduled", ensureDuration))
+				wg.Add(numMorePods)
+				for i := 0; i < numMorePods; i++ {
+					pod := morePods[i]
+					go func() {
+						defer ginkgo.GinkgoRecover()
+						defer wg.Done()
+						ensurePodNotScheduled(pod)
+					}()
+				}
+				wg.Wait()
+
+				// We need to delete each running pod, otherwise the new ones cannot use the claim.
+				ginkgo.By(fmt.Sprintf("Deleting the initial %d pods", numMaxPods))
+				wg.Add(numMaxPods)
+				for i := 0; i < numMaxPods; i++ {
+					pod := pods[i]
+					go func() {
+						defer ginkgo.GinkgoRecover()
+						defer wg.Done()
+						err := f.ClientSet.CoreV1().Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{})
+						framework.ExpectNoError(err, "delete pod")
+						framework.ExpectNoError(e2epod.WaitForPodNotFoundInNamespace(ctx, f.ClientSet, pod.Name, pod.Namespace, f.Timeouts.PodStartSlow))
+					}()
+				}
+				wg.Wait()
+
+				// Now those should also run - eventually...
+				ginkgo.By(fmt.Sprintf("Waiting for the additional %d pods to be scheduled", numMorePods))
+				wg.Add(numMorePods)
+				for i := 0; i < numMorePods; i++ {
+					pod := morePods[i]
+					go func() {
+						defer ginkgo.GinkgoRecover()
+						defer wg.Done()
+						waitForPodScheduled(pod)
+					}()
+				}
+				wg.Wait()
+			})
+		})
 	}
 
 	ginkgo.Context("on single node", func() {
@@ -898,7 +973,7 @@ var _ = framework.SIGDescribe("node")("DRA", feature.DynamicResourceAllocation, 
 		driver := NewDriver(f, nodes, networkResources)
 		b := newBuilder(f, driver)
 
-		f.It("support validating admission policy for admin access", feature.DRAAdminAccess, func(ctx context.Context) {
+		f.It("support validating admission policy for admin access", feature.DRAAdminAccess, framework.WithFeatureGate(features.DRAAdminAccess), framework.WithFeatureGate(features.DynamicResourceAllocation), func(ctx context.Context) {
 			// Create VAP, after making it unique to the current test.
 			adminAccessPolicyYAML := strings.ReplaceAll(adminAccessPolicyYAML, "dra.example.com", b.f.UniqueName)
 			driver.createFromYAML(ctx, []byte(adminAccessPolicyYAML), "")
@@ -921,7 +996,7 @@ var _ = framework.SIGDescribe("node")("DRA", feature.DynamicResourceAllocation, 
 			claim.Spec.Devices.Requests[0].AdminAccess = ptr.To(true)
 			_, claimTemplate := b.podInline()
 			claimTemplate.Spec.Spec.Devices.Requests[0].AdminAccess = ptr.To(true)
-			matchVAPError := gomega.MatchError(gomega.ContainSubstring("admin access to devices not enabled" /* in namespace " + b.f.Namespace.Name */))
+			matchVAPError := gomega.MatchError(gomega.ContainSubstring("admin access to devices not enabled in namespace " + b.f.Namespace.Name))
 			gomega.Eventually(ctx, func(ctx context.Context) error {
 				// First delete, in case that it succeeded earlier.
 				if err := b.f.ClientSet.ResourceV1beta1().ResourceClaims(b.f.Namespace.Name).Delete(ctx, claim.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
@@ -1004,14 +1079,20 @@ var _ = framework.SIGDescribe("node")("DRA", feature.DynamicResourceAllocation, 
 						Used: v1.ResourceList{v1.ResourceName(resourceName): resource.MustParse("1")},
 					})})))
 
-			// Now creating another claim should fail.
-			claim2 := claim.DeepCopy()
-			claim2.Name = "claim-1"
-			_, err = f.ClientSet.ResourceV1beta1().ResourceClaims(f.Namespace.Name).Create(ctx, claim2, metav1.CreateOptions{})
-			gomega.Expect(err).Should(gomega.MatchError(gomega.ContainSubstring("exceeded quota: object-count, requested: count/resourceclaims.resource.k8s.io=1, used: count/resourceclaims.resource.k8s.io=1, limited: count/resourceclaims.resource.k8s.io=1")), "creating second claim not allowed")
+			// Now creating another claim should eventually fail. The quota may not be enforced immediately if
+			// it hasn't yet landed in the API server's cache.
+			//
+			// If creating a claim erroneously succeeds, we don't want to immediately fail on the next try
+			// with an "already exists" error, so use a new name each time.
+			claim.GenerateName = "claim-1-"
+			claim.Name = ""
+			gomega.Eventually(ctx, func(ctx context.Context) error {
+				_, err := f.ClientSet.ResourceV1beta1().ResourceClaims(f.Namespace.Name).Create(ctx, claim, metav1.CreateOptions{})
+				return err
+			}).Should(gomega.MatchError(gomega.ContainSubstring("exceeded quota: object-count, requested: count/resourceclaims.resource.k8s.io=1, used: count/resourceclaims.resource.k8s.io=1, limited: count/resourceclaims.resource.k8s.io=1")), "creating second claim not allowed")
 		})
 
-		f.It("DaemonSet with admin access", feature.DRAAdminAccess, func(ctx context.Context) {
+		f.It("DaemonSet with admin access", feature.DRAAdminAccess, framework.WithFeatureGate(features.DRAAdminAccess), framework.WithFeatureGate(features.DynamicResourceAllocation), func(ctx context.Context) {
 			pod, template := b.podInline()
 			template.Spec.Spec.Devices.Requests[0].AdminAccess = ptr.To(true)
 			// Limit the daemon set to the one node where we have the driver.

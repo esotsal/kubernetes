@@ -48,6 +48,11 @@ const (
 	// caching with ETags containing all APIResources known to the apiserver.
 	AggregatedDiscoveryEndpoint featuregate.Feature = "AggregatedDiscoveryEndpoint"
 
+	// owner: @modulitos
+	//
+	// Allow user.DefaultInfo.UID to be set from x509 cert during cert auth.
+	AllowParsingUserUIDFromCertAuth featuregate.Feature = "AllowParsingUserUIDFromCertAuth"
+
 	// owner: @vinayakankugoyal
 	// kep: https://kep.k8s.io/4633
 	//
@@ -62,13 +67,6 @@ const (
 	// a new delete option to allow deletion of such corrupt
 	// resources using the Kubernetes API only.
 	AllowUnsafeMalformedObjectDeletion featuregate.Feature = "AllowUnsafeMalformedObjectDeletion"
-
-	// owner: @smarterclayton
-	// stable: 1.29
-	//
-	// Allow API clients to retrieve resource lists in chunks rather than
-	// all at once.
-	APIListChunking featuregate.Feature = "APIListChunking"
 
 	// owner: @ilackams
 	//
@@ -118,10 +116,6 @@ const (
 	// Enables coordinated leader election in the API server
 	CoordinatedLeaderElection featuregate.Feature = "CoordinatedLeaderElection"
 
-	//
-	// Allows for updating watchcache resource version with progress notify events.
-	EfficientWatchResumption featuregate.Feature = "EfficientWatchResumption"
-
 	// owner: @aramase
 	// kep: https://kep.k8s.io/3299
 	// deprecated: v1.28
@@ -148,6 +142,13 @@ const (
 	// Allow apiservers to show a count of remaining items in the response
 	// to a chunking list request.
 	RemainingItemCount featuregate.Feature = "RemainingItemCount"
+
+	// owner: @stlaz
+	//
+	// Enable kube-apiserver to accept UIDs via request header authentication.
+	// This will also make the kube-apiserver's API aggregator add UIDs via standard
+	// headers when forwarding requests to the servers serving the aggregated API.
+	RemoteRequestHeaderUID featuregate.Feature = "RemoteRequestHeaderUID"
 
 	// owner: @wojtek-t
 	//
@@ -224,11 +225,6 @@ const (
 
 	// owner: @wojtek-t
 	//
-	// Enables support for watch bookmark events.
-	WatchBookmark featuregate.Feature = "WatchBookmark"
-
-	// owner: @wojtek-t
-	//
 	// Enables post-start-hook for storage readiness
 	WatchCacheInitializationPostStartHook featuregate.Feature = "WatchCacheInitializationPostStartHook"
 
@@ -273,6 +269,10 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 		{Version: version.MustParse("1.30"), Default: true, PreRelease: featuregate.GA, LockToDefault: true},
 	},
 
+	AllowParsingUserUIDFromCertAuth: {
+		{Version: version.MustParse("1.33"), Default: true, PreRelease: featuregate.Beta},
+	},
+
 	AllowUnsafeMalformedObjectDeletion: {
 		{Version: version.MustParse("1.32"), Default: false, PreRelease: featuregate.Alpha},
 	},
@@ -280,12 +280,6 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 	AnonymousAuthConfigurableEndpoints: {
 		{Version: version.MustParse("1.31"), Default: false, PreRelease: featuregate.Alpha},
 		{Version: version.MustParse("1.32"), Default: true, PreRelease: featuregate.Beta},
-	},
-
-	APIListChunking: {
-		{Version: version.MustParse("1.8"), Default: false, PreRelease: featuregate.Alpha},
-		{Version: version.MustParse("1.9"), Default: true, PreRelease: featuregate.Beta},
-		{Version: version.MustParse("1.29"), Default: true, PreRelease: featuregate.GA, LockToDefault: true},
 	},
 
 	APIResponseCompression: {
@@ -333,13 +327,8 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 		{Version: version.MustParse("1.31"), Default: false, PreRelease: featuregate.Alpha},
 	},
 
-	EfficientWatchResumption: {
-		{Version: version.MustParse("1.20"), Default: false, PreRelease: featuregate.Alpha},
-		{Version: version.MustParse("1.21"), Default: true, PreRelease: featuregate.Beta},
-		{Version: version.MustParse("1.24"), Default: true, PreRelease: featuregate.GA, LockToDefault: true},
-	},
-
 	KMSv1: {
+		{Version: version.MustParse("1.0"), Default: true, PreRelease: featuregate.GA},
 		{Version: version.MustParse("1.28"), Default: true, PreRelease: featuregate.Deprecated},
 		{Version: version.MustParse("1.29"), Default: false, PreRelease: featuregate.Deprecated},
 	},
@@ -357,6 +346,10 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 		{Version: version.MustParse("1.15"), Default: false, PreRelease: featuregate.Alpha},
 		{Version: version.MustParse("1.16"), Default: true, PreRelease: featuregate.Beta},
 		{Version: version.MustParse("1.29"), Default: true, PreRelease: featuregate.GA, LockToDefault: true},
+	},
+
+	RemoteRequestHeaderUID: {
+		{Version: version.MustParse("1.32"), Default: false, PreRelease: featuregate.Alpha},
 	},
 
 	ResilientWatchCacheInitialization: {
@@ -406,12 +399,6 @@ var defaultVersionedKubernetesFeatureGates = map[featuregate.Feature]featuregate
 	UnauthenticatedHTTP2DOSMitigation: {
 		{Version: version.MustParse("1.25"), Default: false, PreRelease: featuregate.Beta},
 		{Version: version.MustParse("1.29"), Default: true, PreRelease: featuregate.Beta},
-	},
-
-	WatchBookmark: {
-		{Version: version.MustParse("1.15"), Default: false, PreRelease: featuregate.Alpha},
-		{Version: version.MustParse("1.16"), Default: true, PreRelease: featuregate.Beta},
-		{Version: version.MustParse("1.17"), Default: true, PreRelease: featuregate.GA, LockToDefault: true},
 	},
 
 	WatchCacheInitializationPostStartHook: {

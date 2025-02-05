@@ -620,7 +620,7 @@ type Proxier struct {
 	recorder events.EventRecorder
 
 	serviceHealthServer healthcheck.ServiceHealthServer
-	healthzServer       *healthcheck.ProxierHealthServer
+	healthzServer       *healthcheck.ProxyHealthServer
 
 	hns               HostNetworkService
 	hcn               HcnService
@@ -676,7 +676,7 @@ func NewProxier(
 	hostname string,
 	nodeIP net.IP,
 	recorder events.EventRecorder,
-	healthzServer *healthcheck.ProxierHealthServer,
+	healthzServer *healthcheck.ProxyHealthServer,
 	healthzBindAddress string,
 	config config.KubeProxyWinkernelConfiguration,
 ) (*Proxier, error) {
@@ -796,8 +796,8 @@ func NewProxier(
 		terminatedEndpoints:   make(map[string]bool),
 	}
 
-	serviceChanges := proxy.NewServiceChangeTracker(proxier.newServiceInfo, ipFamily, recorder, proxier.serviceMapChange)
-	endPointChangeTracker := proxy.NewEndpointsChangeTracker(hostname, proxier.newEndpointInfo, ipFamily, recorder, proxier.endpointsMapChange)
+	serviceChanges := proxy.NewServiceChangeTracker(ipFamily, proxier.newServiceInfo, proxier.serviceMapChange)
+	endPointChangeTracker := proxy.NewEndpointsChangeTracker(ipFamily, hostname, proxier.newEndpointInfo, proxier.endpointsMapChange)
 	proxier.endpointsChanges = endPointChangeTracker
 	proxier.serviceChanges = serviceChanges
 
@@ -813,7 +813,7 @@ func NewDualStackProxier(
 	hostname string,
 	nodeIPs map[v1.IPFamily]net.IP,
 	recorder events.EventRecorder,
-	healthzServer *healthcheck.ProxierHealthServer,
+	healthzServer *healthcheck.ProxyHealthServer,
 	healthzBindAddress string,
 	config config.KubeProxyWinkernelConfiguration,
 ) (proxy.Provider, error) {
@@ -933,7 +933,7 @@ func (proxier *Proxier) Sync() {
 	if proxier.healthzServer != nil {
 		proxier.healthzServer.QueuedUpdate(proxier.ipFamily)
 	}
-	metrics.SyncProxyRulesLastQueuedTimestamp.SetToCurrentTime()
+	metrics.SyncProxyRulesLastQueuedTimestamp.WithLabelValues(string(proxier.ipFamily)).SetToCurrentTime()
 	proxier.syncRunner.Run()
 }
 
@@ -944,7 +944,7 @@ func (proxier *Proxier) SyncLoop() {
 		proxier.healthzServer.Updated(proxier.ipFamily)
 	}
 	// synthesize "last change queued" time as the informers are syncing.
-	metrics.SyncProxyRulesLastQueuedTimestamp.SetToCurrentTime()
+	metrics.SyncProxyRulesLastQueuedTimestamp.WithLabelValues(string(proxier.ipFamily)).SetToCurrentTime()
 	proxier.syncRunner.Loop(wait.NeverStop)
 }
 
@@ -1140,7 +1140,7 @@ func (proxier *Proxier) syncProxyRules() {
 	// Keep track of how long syncs take.
 	start := time.Now()
 	defer func() {
-		metrics.SyncProxyRulesLatency.Observe(metrics.SinceInSeconds(start))
+		metrics.SyncProxyRulesLatency.WithLabelValues(string(proxier.ipFamily)).Observe(metrics.SinceInSeconds(start))
 		klog.V(4).InfoS("Syncing proxy rules complete", "elapsed", time.Since(start))
 	}()
 
@@ -1695,7 +1695,7 @@ func (proxier *Proxier) syncProxyRules() {
 	if proxier.healthzServer != nil {
 		proxier.healthzServer.Updated(proxier.ipFamily)
 	}
-	metrics.SyncProxyRulesLastTimestamp.SetToCurrentTime()
+	metrics.SyncProxyRulesLastTimestamp.WithLabelValues(string(proxier.ipFamily)).SetToCurrentTime()
 
 	// Update service healthchecks.  The endpoints list might include services that are
 	// not "OnlyLocal", but the services list will not, and the serviceHealthServer

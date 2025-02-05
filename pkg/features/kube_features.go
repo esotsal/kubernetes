@@ -68,7 +68,7 @@ const (
 	AppArmorFields featuregate.Feature = "AppArmorFields"
 
 	// owner: @liggitt
-	// kep:
+	// kep: https://kep.k8s.io/4601
 	//
 	// Make the Node authorizer use fine-grained selector authorization.
 	// Requires AuthorizeWithSelectors to be enabled.
@@ -158,6 +158,12 @@ const (
 	//
 	// Enable usage of Provision of PVCs from snapshots in other namespaces
 	CrossNamespaceVolumeDataSource featuregate.Feature = "CrossNamespaceVolumeDataSource"
+
+	// owner: @atiratree
+	// kep: http://kep.k8s.io/3973
+	//
+	// Deployments and replica sets can now also track terminating pods via .status.terminatingReplicas.
+	DeploymentPodReplacementPolicy featuregate.Feature = "DeploymentPodReplacementPolicy"
 
 	// owner: @elezar
 	// kep: http://kep.k8s.io/4009
@@ -384,13 +390,6 @@ const (
 	// Add support for distributed tracing in the kubelet
 	KubeletTracing featuregate.Feature = "KubeletTracing"
 
-	// owner: @alexanderConstantinescu
-	// kep: http://kep.k8s.io/3836
-	//
-	// Implement connection draining for terminating nodes for
-	// `externalTrafficPolicy: Cluster` services.
-	KubeProxyDrainingTerminatingNodes featuregate.Feature = "KubeProxyDrainingTerminatingNodes"
-
 	// owner: @RobertKrawitz
 	//
 	// Allow use of filesystems for ephemeral storage monitoring.
@@ -446,7 +445,8 @@ const (
 	// owner: @aravindhp @LorbusChris
 	// kep: http://kep.k8s.io/2271
 	//
-	// Enables querying logs of node services using the /logs endpoint
+	// Enables querying logs of node services using the /logs endpoint. Enabling this feature has security implications.
+	// The recommendation is to enable it on a need basis for debugging purposes and disabling otherwise.
 	NodeLogQuery featuregate.Feature = "NodeLogQuery"
 
 	// owner: @iholder101 @kannon92
@@ -454,12 +454,6 @@ const (
 
 	// Permits kubelet to run with swap enabled.
 	NodeSwap featuregate.Feature = "NodeSwap"
-
-	// owner: @mortent, @atiratree, @ravig
-	// kep: http://kep.k8s.io/3018
-	//
-	// Enables PDBUnhealthyPodEvictionPolicy for PodDisruptionBudgets
-	PDBUnhealthyPodEvictionPolicy featuregate.Feature = "PDBUnhealthyPodEvictionPolicy"
 
 	// owner: @RomanBednar
 	// kep: https://kep.k8s.io/3762

@@ -67,6 +67,8 @@ import (
 	metricsfeatures "k8s.io/component-base/metrics/features"
 	"k8s.io/component-base/metrics/legacyregistry"
 	"k8s.io/component-base/metrics/prometheus/slis"
+	zpagesfeatures "k8s.io/component-base/zpages/features"
+	"k8s.io/component-base/zpages/statusz"
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
 	"k8s.io/cri-client/pkg/util"
 	podresourcesapi "k8s.io/kubelet/pkg/apis/podresources/v1"
@@ -105,6 +107,11 @@ const (
 	debugFlagPath       = "/debug/flags/v"
 	podsPath            = "/pods"
 	runningPodsPath     = "/runningpods/"
+)
+
+const (
+	// Kubelet component name
+	ComponentKubelet = "kubelet"
 )
 
 // Server is a http.Handler which exposes kubelet functionality over HTTP.
@@ -472,17 +479,6 @@ func (s *Server) InstallDefaultHandlers() {
 	s.restfulCont.Handle(proberMetricsPath,
 		compbasemetrics.HandlerFor(p, compbasemetrics.HandlerOpts{ErrorHandling: compbasemetrics.ContinueOnError}),
 	)
-
-	// Only enable checkpoint API if the feature is enabled
-	if utilfeature.DefaultFeatureGate.Enabled(features.ContainerCheckpoint) {
-		s.addMetricsBucketMatcher("checkpoint")
-		ws = &restful.WebService{}
-		ws.Path(checkpointPath).Produces(restful.MIME_JSON)
-		ws.Route(ws.POST("/{podNamespace}/{podID}/{containerName}").
-			To(s.checkpoint).
-			Operation("checkpoint"))
-		s.restfulCont.Add(ws)
-	}
 }
 
 // InstallDebuggingHandlers registers the HTTP request patterns that serve logs or run commands/containers
@@ -567,6 +563,11 @@ func (s *Server) InstallDebuggingHandlers() {
 	s.addMetricsBucketMatcher("configz")
 	configz.InstallHandler(s.restfulCont)
 
+	if utilfeature.DefaultFeatureGate.Enabled(zpagesfeatures.ComponentStatusz) {
+		s.addMetricsBucketMatcher("statusz")
+		statusz.Install(s.restfulCont, ComponentKubelet, statusz.NewRegistry())
+	}
+
 	// The /runningpods endpoint is used for testing only.
 	s.addMetricsBucketMatcher("runningpods")
 	ws = new(restful.WebService)
@@ -577,6 +578,17 @@ func (s *Server) InstallDebuggingHandlers() {
 		To(s.getRunningPods).
 		Operation("getRunningPods"))
 	s.restfulCont.Add(ws)
+
+	// Only enable checkpoint API if the feature is enabled
+	if utilfeature.DefaultFeatureGate.Enabled(features.ContainerCheckpoint) {
+		s.addMetricsBucketMatcher("checkpoint")
+		ws = &restful.WebService{}
+		ws.Path(checkpointPath).Produces(restful.MIME_JSON)
+		ws.Route(ws.POST("/{podNamespace}/{podID}/{containerName}").
+			To(s.checkpoint).
+			Operation("checkpoint"))
+		s.restfulCont.Add(ws)
+	}
 }
 
 // InstallDebuggingDisabledHandlers registers the HTTP request patterns that provide better error message
