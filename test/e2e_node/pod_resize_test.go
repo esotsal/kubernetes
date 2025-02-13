@@ -1874,7 +1874,6 @@ func doPodResizeExtendTests(policy cpuManagerPolicyConfig, isInPlacePodVerticalS
 	}
 
 	noRestart := v1.NotRequired
-	//doRestart := v1.RestartContainer
 	testsWithFalseFullCPUs := []testCase{
 		{
 			name: "1 Guaranteed QoS pod, one container - increase CPU & memory, FullPCPUsOnlyOption = false",
@@ -2038,7 +2037,7 @@ func doPodResizeExtendTests(policy cpuManagerPolicyConfig, isInPlacePodVerticalS
 				},
 			},
 		},
-		//Abnormal case, CPUs in mustKeepCPUs not full PCPUs, the mustKeepCPUs will be ignored
+		// Abnormal case, CPUs in mustKeepCPUs not full PCPUs, the mustKeepCPUs will be ignored
 		{
 			name: "1 Guaranteed QoS pod, one container - decrease CPU with wrong mustKeepCPU, FullPCPUsOnlyOption = ture",
 			containers: []e2epod.ResizableContainerInfo{
@@ -2213,7 +2212,6 @@ func doMultiPodResizeTests(policy cpuManagerPolicyConfig, isInPlacePodVerticalSc
 		containers          []e2epod.ResizableContainerInfo
 		patchString         string
 		expected            []e2epod.ResizableContainerInfo
-		addExtendedResource bool
 	}
 
 	type testCase struct {
