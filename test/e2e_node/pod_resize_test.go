@@ -2437,7 +2437,7 @@ func doMultiPodResizeTests(policy cpuManagerPolicyConfig, isInPlacePodVerticalSc
 	})
 }
 
-var _ = SIGDescribe("Pod InPlace Resize Container chunxia", framework.WithSerial(), func() {
+var _ = SIGDescribe("Pod InPlace Resize Container Extended Cases", framework.WithSerial(), func() {
 
 	policiesGeneralAvailability := []cpuManagerPolicyConfig{
 		{
