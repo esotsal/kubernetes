@@ -39,13 +39,10 @@ import (
 	kubetypes "k8s.io/kubernetes/pkg/kubelet/types"
 	"k8s.io/kubernetes/pkg/kubelet/util/format"
 	httpprobe "k8s.io/kubernetes/pkg/probe/http"
-	"k8s.io/kubernetes/pkg/security/apparmor"
 )
 
 const (
 	maxRespBodyLength = 10 * 1 << 10 // 10KB
-
-	AppArmorNotAdmittedReason = "AppArmor"
 )
 
 type handlerRunner struct {
@@ -199,35 +196,6 @@ func discardHTTPRespBody(resp *http.Response) {
 
 	if resp.ContentLength <= maxRespBodyLength {
 		io.Copy(io.Discard, &io.LimitedReader{R: resp.Body, N: maxRespBodyLength})
-	}
-}
-
-// NewAppArmorAdmitHandler returns a PodAdmitHandler which is used to evaluate
-// if a pod can be admitted from the perspective of AppArmor.
-func NewAppArmorAdmitHandler(validator apparmor.Validator) PodAdmitHandler {
-	return &appArmorAdmitHandler{
-		Validator: validator,
-	}
-}
-
-type appArmorAdmitHandler struct {
-	apparmor.Validator
-}
-
-func (a *appArmorAdmitHandler) Admit(attrs *PodAdmitAttributes) PodAdmitResult {
-	// If the pod is already running or terminated, no need to recheck AppArmor.
-	if attrs.Pod.Status.Phase != v1.PodPending {
-		return PodAdmitResult{Admit: true}
-	}
-
-	err := a.Validate(attrs.Pod)
-	if err == nil {
-		return PodAdmitResult{Admit: true}
-	}
-	return PodAdmitResult{
-		Admit:   false,
-		Reason:  AppArmorNotAdmittedReason,
-		Message: fmt.Sprintf("Cannot enforce AppArmor: %v", err),
 	}
 }
 
