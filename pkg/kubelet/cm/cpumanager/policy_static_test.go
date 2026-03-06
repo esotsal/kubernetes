@@ -817,6 +817,7 @@ func runStaticPolicyTestCaseWithFeatureGate(t *testing.T, testCase staticPolicyT
 func runStaticPolicyTestCaseWithFeatureGateAlongsideInPlacePodVerticalScaling(t *testing.T, testCase staticPolicyTest) {
 	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, pkgfeatures.CPUManagerPolicyAlphaOptions, true)
 	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, pkgfeatures.InPlacePodVerticalScaling, true)
+	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, pkgfeatures.InPlacePodVerticalScalingExclusiveCPUs, false)
 	runStaticPolicyTestCase(t, testCase)
 }
 
@@ -1088,6 +1089,7 @@ func TestStaticPolicyPodResizeCPUsSingleContainerPod(t *testing.T) {
 		logger, _ := ktesting.NewTestContext(t)
 		featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, pkgfeatures.CPUManagerPolicyAlphaOptions, true)
 		featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, pkgfeatures.InPlacePodVerticalScaling, true)
+		featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, pkgfeatures.InPlacePodVerticalScalingExclusiveCPUs, false)
 		t.Run(testCase.description, func(t *testing.T) {
 
 			policy, _ := NewStaticPolicy(logger, testCase.topo, testCase.numReservedCPUs, cpuset.New(), topologymanager.NewFakeManager(), nil)
@@ -1426,6 +1428,7 @@ func TestStaticPolicyPodResizeCPUsMultiContainerPod(t *testing.T) {
 		logger, _ := ktesting.NewTestContext(t)
 		featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, pkgfeatures.CPUManagerPolicyAlphaOptions, true)
 		featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, pkgfeatures.InPlacePodVerticalScaling, true)
+		featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, pkgfeatures.InPlacePodVerticalScalingExclusiveCPUs, false)
 		t.Run(testCase.description, func(t *testing.T) {
 
 			policy, _ := NewStaticPolicy(logger, testCase.topo, testCase.numReservedCPUs, cpuset.New(), topologymanager.NewFakeManager(), nil)
@@ -1685,7 +1688,7 @@ func TestTopologyAwareAllocateCPUs(t *testing.T) {
 			continue
 		}
 
-		cpuAlloc, err := policy.allocateCPUs(logger, st, tc.numRequested, tc.socketMask, cpuset.New(), nil, nil)
+		cpuAlloc, err := policy.allocateCPUs(logger, st, tc.numRequested, tc.socketMask, cpuset.New())
 		if err != nil {
 			t.Errorf("StaticPolicy allocateCPUs() error (%v). expected CPUSet %v not error %v",
 				tc.description, tc.expCSet, err)
