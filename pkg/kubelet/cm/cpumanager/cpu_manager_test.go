@@ -401,6 +401,12 @@ func makeMultiContainerPodWithOptionsAndPodLevelResources(podLevelCPUs string, i
 	return pod
 }
 
+func removeStateDirectory(t *testing.T, testDirectory string) {
+	if err := os.RemoveAll(testDirectory); err != nil {
+		t.Fatalf("Fail to remove sDir: %v", err)
+	}
+}
+
 func TestCPUManagerAdd(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.WindowsCPUAndMemoryAffinity, true)
@@ -843,7 +849,7 @@ func TestCPUManagerGenerate(t *testing.T) {
 			if err != nil {
 				t.Errorf("cannot create state file: %s", err.Error())
 			}
-			defer os.RemoveAll(sDir)
+			defer removeStateDirectory(t, sDir)
 
 			logger, _ := ktesting.NewTestContext(t)
 			mgr, err := NewManager(logger, testCase.cpuPolicyName, nil, 5*time.Second, machineInfo, cpuset.New(), testCase.nodeAllocatableReservation, sDir, topologymanager.NewFakeManager())
@@ -919,6 +925,7 @@ func TestReconcileState(t *testing.T) {
 		featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.WindowsCPUAndMemoryAffinity, true)
 	}
 
+	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.InPlacePodVerticalScalingExclusiveCPUs, false)
 	logger, _ := ktesting.NewTestContext(t)
 
 	testPolicy, _ := NewStaticPolicy(
@@ -1583,7 +1590,7 @@ func TestCPUManagerHandlePolicyOptions(t *testing.T) {
 			if err != nil {
 				t.Errorf("cannot create state file: %s", err.Error())
 			}
-			defer os.RemoveAll(sDir)
+			defer removeStateDirectory(t, sDir)
 
 			logger, _ := ktesting.NewTestContext(t)
 			_, err = NewManager(logger, testCase.cpuPolicyName, testCase.cpuPolicyOptions, 5*time.Second, machineInfo, cpuset.New(), nodeAllocatableReservation, sDir, topologymanager.NewFakeManager())
@@ -1968,17 +1975,11 @@ func TestCPUManagerAddWithInitContainersWithInPlacePodVerticalScalingExclusiveCP
 			},
 		}
 
-		containers := append(
-			testCase.pod.Spec.InitContainers,
-			testCase.pod.Spec.Containers...)
+		containers := append(testCase.pod.Spec.InitContainers, testCase.pod.Spec.Containers...) //nolint:gocritic
 
-		containerIDs := append(
-			testCase.initContainerIDs,
-			testCase.containerIDs...)
+		containerIDs := append(testCase.initContainerIDs, testCase.containerIDs...) //nolint:gocritic
 
-		expCSets := append(
-			testCase.expInitCSets,
-			testCase.expCSets...)
+		expCSets := append(testCase.expInitCSets, testCase.expCSets...) //nolint:gocritic
 
 		cumCSet := cpuset.New()
 
@@ -2110,7 +2111,7 @@ func TestCPUManagerGenerateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing
 			if err != nil {
 				t.Errorf("cannot create state file: %s", err.Error())
 			}
-			defer os.RemoveAll(sDir)
+			defer removeStateDirectory(t, sDir)
 
 			logger, _ := ktesting.NewTestContext(t)
 			mgr, err := NewManager(logger, testCase.cpuPolicyName, nil, 5*time.Second, machineInfo, cpuset.New(), testCase.nodeAllocatableReservation, sDir, topologymanager.NewFakeManager())
@@ -2851,7 +2852,7 @@ func TestCPUManagerHandlePolicyOptionsWithInPlacePodVerticalScalingExclusiveCPUs
 			if err != nil {
 				t.Errorf("cannot create state file: %s", err.Error())
 			}
-			defer os.RemoveAll(sDir)
+			defer removeStateDirectory(t, sDir)
 
 			logger, _ := ktesting.NewTestContext(t)
 			_, err = NewManager(logger, testCase.cpuPolicyName, testCase.cpuPolicyOptions, 5*time.Second, machineInfo, cpuset.New(), nodeAllocatableReservation, sDir, topologymanager.NewFakeManager())
