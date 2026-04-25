@@ -218,15 +218,52 @@ func (p *mockPolicy) GetAllocatableCPUs(m state.State) cpuset.CPUSet {
 }
 
 type mockRuntimeService struct {
-	err error
+	err                           []error
+	containerIDsWithExclusiveCPUs []string
+	state                         map[string]cpuset.CPUSet
+	testCPUConflicts              bool
+	testCaseDescription           string
+	t                             *testing.T
 }
 
-func (rt mockRuntimeService) UpdateContainerResources(_ context.Context, id string, resources *runtimeapi.ContainerResources) error {
-	return rt.err
-}
+func (rt *mockRuntimeService) UpdateContainerResources(_ context.Context, id string, resources *runtimeapi.ContainerResources) error {
+	var ret error
+	if len(rt.err) > 0 {
+		ret = rt.err[0]
+		rt.err = rt.err[1:]
+	}
 
-func (rt mockRuntimeService) Close(_ context.Context) error {
-	return rt.err
+	// update state
+	if ret == nil {
+		newSet := rt.getCPUSetFromResources(resources)
+		if !newSet.IsEmpty() {
+			rt.state[id] = newSet
+		}
+	}
+
+	if rt.testCPUConflicts {
+		// count in how many containers each CPU is used
+		cpuUsage := make(map[int][]string)
+		for containerID, set := range rt.state {
+			for _, cpu := range set.List() {
+				cpuUsage[cpu] = append(cpuUsage[cpu], containerID)
+			}
+		}
+
+		// check if CPUs assigned to containers with exclusive CPUs are used exactly once
+		for _, containerID := range rt.containerIDsWithExclusiveCPUs {
+			set := rt.state[containerID]
+			for _, cpu := range set.List() {
+				if len(cpuUsage[cpu]) != 1 {
+					rt.t.Errorf("%v", rt.testCaseDescription)
+					rt.t.Errorf("after updating container resources of %s", id)
+					rt.t.Errorf("Expected CPU %d usage 1, actual usage %d %v", cpu, len(cpuUsage[cpu]), cpuUsage[cpu])
+				}
+			}
+		}
+	}
+
+	return ret
 }
 
 type mockPodStatusProvider struct {
@@ -434,7 +471,7 @@ func TestCPUManagerAdd(t *testing.T) {
 		nil)
 	testCases := []struct {
 		description        string
-		updateErr          error
+		updateErr          []error
 		policy             Policy
 		expCPUSet          cpuset.CPUSet
 		expAllocateErr     error
@@ -468,7 +505,7 @@ func TestCPUManagerAdd(t *testing.T) {
 				defaultCPUSet: cpuset.New(1, 2, 3, 4),
 			},
 			lastUpdateState: state.NewMemoryState(logger),
-			containerRuntime: mockRuntimeService{
+			containerRuntime: &mockRuntimeService{
 				err: testCase.updateErr,
 			},
 			containerMap:      containermap.NewContainerMap(),
@@ -698,7 +735,7 @@ func TestCPUManagerAddWithInitContainers(t *testing.T) {
 			policy:            policy,
 			state:             mockState,
 			lastUpdateState:   state.NewMemoryState(logger),
-			containerRuntime:  mockRuntimeService{},
+			containerRuntime:  &mockRuntimeService{},
 			containerMap:      containermap.NewContainerMap(),
 			podStatusProvider: mockPodStatusProvider{},
 			sourcesReady:      &sourcesReadyStub{},
@@ -890,7 +927,7 @@ func TestCPUManagerRemove(t *testing.T) {
 			defaultCPUSet: cpuset.New(),
 		},
 		lastUpdateState:   state.NewMemoryState(logger),
-		containerRuntime:  mockRuntimeService{},
+		containerRuntime:  &mockRuntimeService{},
 		containerMap:      containerMap,
 		activePods:        func() []*v1.Pod { return nil },
 		podStatusProvider: mockPodStatusProvider{},
@@ -907,7 +944,7 @@ func TestCPUManagerRemove(t *testing.T) {
 			err: fmt.Errorf("fake error"),
 		},
 		state:             state.NewMemoryState(logger),
-		containerRuntime:  mockRuntimeService{},
+		containerRuntime:  &mockRuntimeService{},
 		containerMap:      containerMap,
 		activePods:        func() []*v1.Pod { return nil },
 		podStatusProvider: mockPodStatusProvider{},
@@ -956,7 +993,9 @@ func TestReconcileState(t *testing.T) {
 		activePods                      []*v1.Pod
 		pspPS                           v1.PodStatus
 		pspFound                        bool
-		updateErr                       error
+		updateErr                       []error
+		containerIDsWithExclusiveCPUs   []string
+		containerRuntimeInitialState    map[string]cpuset.CPUSet
 		stAssignments                   state.ContainerCPUAssignments
 		stDefaultCPUSet                 cpuset.CPUSet
 		lastUpdateStAssignments         state.ContainerCPUAssignments
@@ -965,6 +1004,7 @@ func TestReconcileState(t *testing.T) {
 		expectStDefaultCPUSet           cpuset.CPUSet
 		expectLastUpdateStAssignments   state.ContainerCPUAssignments
 		expectLastUpdateStDefaultCPUSet cpuset.CPUSet
+		expectContainerRuntimeState     map[string]cpuset.CPUSet
 		expectSucceededContainerName    []string
 		expectFailedContainerName       []string
 	}{
@@ -997,8 +1037,10 @@ func TestReconcileState(t *testing.T) {
 					},
 				},
 			},
-			pspFound:  true,
-			updateErr: nil,
+			pspFound:                      true,
+			updateErr:                     nil,
+			containerIDsWithExclusiveCPUs: []string{"fakeContainerID"},
+			containerRuntimeInitialState:  map[string]cpuset.CPUSet{},
 			stAssignments: state.ContainerCPUAssignments{
 				"fakePodUID": map[string]cpuset.CPUSet{
 					"fakeContainerName": cpuset.New(1, 2),
@@ -1019,8 +1061,11 @@ func TestReconcileState(t *testing.T) {
 				},
 			},
 			expectLastUpdateStDefaultCPUSet: cpuset.New(),
-			expectSucceededContainerName:    []string{"fakeContainerName"},
-			expectFailedContainerName:       []string{},
+			expectContainerRuntimeState: map[string]cpuset.CPUSet{
+				"fakeContainerID": cpuset.New(1, 2),
+			},
+			expectSucceededContainerName: []string{"fakeContainerName"},
+			expectFailedContainerName:    []string{},
 		},
 		{
 			description: "cpu manager reconcile init container - no error",
@@ -1051,8 +1096,10 @@ func TestReconcileState(t *testing.T) {
 					},
 				},
 			},
-			pspFound:  true,
-			updateErr: nil,
+			pspFound:                      true,
+			updateErr:                     nil,
+			containerIDsWithExclusiveCPUs: []string{"fakeContainerID"},
+			containerRuntimeInitialState:  map[string]cpuset.CPUSet{},
 			stAssignments: state.ContainerCPUAssignments{
 				"fakePodUID": map[string]cpuset.CPUSet{
 					"fakeContainerName": cpuset.New(1, 2),
@@ -1073,8 +1120,11 @@ func TestReconcileState(t *testing.T) {
 				},
 			},
 			expectLastUpdateStDefaultCPUSet: cpuset.New(),
-			expectSucceededContainerName:    []string{"fakeContainerName"},
-			expectFailedContainerName:       []string{},
+			expectContainerRuntimeState: map[string]cpuset.CPUSet{
+				"fakeContainerID": cpuset.New(1, 2),
+			},
+			expectSucceededContainerName: []string{"fakeContainerName"},
+			expectFailedContainerName:    []string{},
 		},
 		{
 			description: "cpu manager reconcile - pod status not found",
@@ -1097,6 +1147,8 @@ func TestReconcileState(t *testing.T) {
 			pspPS:                           v1.PodStatus{},
 			pspFound:                        false,
 			updateErr:                       nil,
+			containerIDsWithExclusiveCPUs:   []string{},
+			containerRuntimeInitialState:    map[string]cpuset.CPUSet{},
 			stAssignments:                   state.ContainerCPUAssignments{},
 			stDefaultCPUSet:                 cpuset.New(),
 			lastUpdateStAssignments:         state.ContainerCPUAssignments{},
@@ -1105,6 +1157,7 @@ func TestReconcileState(t *testing.T) {
 			expectStDefaultCPUSet:           cpuset.New(),
 			expectLastUpdateStAssignments:   state.ContainerCPUAssignments{},
 			expectLastUpdateStDefaultCPUSet: cpuset.New(),
+			expectContainerRuntimeState:     map[string]cpuset.CPUSet{},
 			expectSucceededContainerName:    []string{},
 			expectFailedContainerName:       []string{},
 		},
@@ -1136,6 +1189,8 @@ func TestReconcileState(t *testing.T) {
 			},
 			pspFound:                        true,
 			updateErr:                       nil,
+			containerIDsWithExclusiveCPUs:   []string{},
+			containerRuntimeInitialState:    map[string]cpuset.CPUSet{},
 			stAssignments:                   state.ContainerCPUAssignments{},
 			stDefaultCPUSet:                 cpuset.New(),
 			lastUpdateStAssignments:         state.ContainerCPUAssignments{},
@@ -1144,6 +1199,7 @@ func TestReconcileState(t *testing.T) {
 			expectStDefaultCPUSet:           cpuset.New(),
 			expectLastUpdateStAssignments:   state.ContainerCPUAssignments{},
 			expectLastUpdateStDefaultCPUSet: cpuset.New(),
+			expectContainerRuntimeState:     map[string]cpuset.CPUSet{},
 			expectSucceededContainerName:    []string{},
 			expectFailedContainerName:       []string{},
 		},
@@ -1176,8 +1232,10 @@ func TestReconcileState(t *testing.T) {
 					},
 				},
 			},
-			pspFound:  true,
-			updateErr: nil,
+			pspFound:                      true,
+			updateErr:                     nil,
+			containerIDsWithExclusiveCPUs: []string{"fakeContainerID"},
+			containerRuntimeInitialState:  map[string]cpuset.CPUSet{},
 			stAssignments: state.ContainerCPUAssignments{
 				"fakePodUID": map[string]cpuset.CPUSet{
 					"fakeContainerName": cpuset.New(),
@@ -1194,6 +1252,7 @@ func TestReconcileState(t *testing.T) {
 			expectStDefaultCPUSet:           cpuset.New(1, 2, 3, 4, 5, 6, 7),
 			expectLastUpdateStAssignments:   state.ContainerCPUAssignments{},
 			expectLastUpdateStDefaultCPUSet: cpuset.New(),
+			expectContainerRuntimeState:     map[string]cpuset.CPUSet{},
 			expectSucceededContainerName:    []string{},
 			expectFailedContainerName:       []string{"fakeContainerName"},
 		},
@@ -1226,8 +1285,10 @@ func TestReconcileState(t *testing.T) {
 					},
 				},
 			},
-			pspFound:  true,
-			updateErr: fmt.Errorf("fake container update error"),
+			pspFound:                      true,
+			updateErr:                     []error{fmt.Errorf("fake container update error")},
+			containerIDsWithExclusiveCPUs: []string{"fakeContainerID"},
+			containerRuntimeInitialState:  map[string]cpuset.CPUSet{},
 			stAssignments: state.ContainerCPUAssignments{
 				"fakePodUID": map[string]cpuset.CPUSet{
 					"fakeContainerName": cpuset.New(1, 2),
@@ -1244,6 +1305,7 @@ func TestReconcileState(t *testing.T) {
 			expectStDefaultCPUSet:           cpuset.New(3, 4, 5, 6, 7),
 			expectLastUpdateStAssignments:   state.ContainerCPUAssignments{},
 			expectLastUpdateStDefaultCPUSet: cpuset.New(),
+			expectContainerRuntimeState:     map[string]cpuset.CPUSet{},
 			expectSucceededContainerName:    []string{},
 			expectFailedContainerName:       []string{"fakeContainerName"},
 		},
@@ -1276,8 +1338,10 @@ func TestReconcileState(t *testing.T) {
 					},
 				},
 			},
-			pspFound:  true,
-			updateErr: nil,
+			pspFound:                      true,
+			updateErr:                     nil,
+			containerIDsWithExclusiveCPUs: []string{"fakeContainerID"},
+			containerRuntimeInitialState:  map[string]cpuset.CPUSet{},
 			stAssignments: state.ContainerCPUAssignments{
 				"fakePodUID": map[string]cpuset.CPUSet{
 					"fakeContainerName": cpuset.New(1, 2),
@@ -1301,8 +1365,11 @@ func TestReconcileState(t *testing.T) {
 				},
 			},
 			expectLastUpdateStDefaultCPUSet: cpuset.New(),
-			expectSucceededContainerName:    []string{"fakeContainerName"},
-			expectFailedContainerName:       []string{},
+			expectContainerRuntimeState: map[string]cpuset.CPUSet{
+				"fakeContainerID": cpuset.New(1, 2),
+			},
+			expectSucceededContainerName: []string{"fakeContainerName"},
+			expectFailedContainerName:    []string{},
 		},
 		{
 			description: "cpu manager reconcile - last update state is current",
@@ -1333,8 +1400,12 @@ func TestReconcileState(t *testing.T) {
 					},
 				},
 			},
-			pspFound:  true,
-			updateErr: nil,
+			pspFound:                      true,
+			updateErr:                     nil,
+			containerIDsWithExclusiveCPUs: []string{"fakeContainerID"},
+			containerRuntimeInitialState: map[string]cpuset.CPUSet{
+				"fakeContainerID": cpuset.New(1, 2),
+			},
 			stAssignments: state.ContainerCPUAssignments{
 				"fakePodUID": map[string]cpuset.CPUSet{
 					"fakeContainerName": cpuset.New(1, 2),
@@ -1359,8 +1430,11 @@ func TestReconcileState(t *testing.T) {
 				},
 			},
 			expectLastUpdateStDefaultCPUSet: cpuset.New(),
-			expectSucceededContainerName:    []string{"fakeContainerName"},
-			expectFailedContainerName:       []string{},
+			expectContainerRuntimeState: map[string]cpuset.CPUSet{
+				"fakeContainerID": cpuset.New(1, 2),
+			},
+			expectSucceededContainerName: []string{"fakeContainerName"},
+			expectFailedContainerName:    []string{},
 		},
 		{
 			description: "cpu manager reconcile - last update state is not current",
@@ -1391,8 +1465,12 @@ func TestReconcileState(t *testing.T) {
 					},
 				},
 			},
-			pspFound:  true,
-			updateErr: nil,
+			pspFound:                      true,
+			updateErr:                     nil,
+			containerIDsWithExclusiveCPUs: []string{"fakeContainerID"},
+			containerRuntimeInitialState: map[string]cpuset.CPUSet{
+				"fakeContainerID": cpuset.New(3, 4),
+			},
 			stAssignments: state.ContainerCPUAssignments{
 				"fakePodUID": map[string]cpuset.CPUSet{
 					"fakeContainerName": cpuset.New(1, 2),
@@ -1417,11 +1495,14 @@ func TestReconcileState(t *testing.T) {
 				},
 			},
 			expectLastUpdateStDefaultCPUSet: cpuset.New(),
-			expectSucceededContainerName:    []string{"fakeContainerName"},
-			expectFailedContainerName:       []string{},
+			expectContainerRuntimeState: map[string]cpuset.CPUSet{
+				"fakeContainerID": cpuset.New(1, 2),
+			},
+			expectSucceededContainerName: []string{"fakeContainerName"},
+			expectFailedContainerName:    []string{},
 		},
 		{
-			description: "cpu manager reconcile default CPU sets - no error",
+			description: "cpu manager reconcile - default CPU sets no error",
 			policy:      testPolicy,
 			activePods: []*v1.Pod{
 				{
@@ -1489,14 +1570,16 @@ func TestReconcileState(t *testing.T) {
 					},
 				},
 			},
-			pspFound:                  true,
-			updateErr:                 nil,
-			stAssignments:             state.ContainerCPUAssignments{},
-			stDefaultCPUSet:           cpuset.New(1, 2, 3, 4, 5, 6, 7),
-			lastUpdateStAssignments:   state.ContainerCPUAssignments{},
-			lastUpdateStDefaultCPUSet: cpuset.New(),
-			expectStAssignments:       state.ContainerCPUAssignments{},
-			expectStDefaultCPUSet:     cpuset.New(1, 2, 3, 4, 5, 6, 7),
+			pspFound:                      true,
+			updateErr:                     nil,
+			containerIDsWithExclusiveCPUs: []string{},
+			containerRuntimeInitialState:  map[string]cpuset.CPUSet{},
+			stAssignments:                 state.ContainerCPUAssignments{},
+			stDefaultCPUSet:               cpuset.New(1, 2, 3, 4, 5, 6, 7),
+			lastUpdateStAssignments:       state.ContainerCPUAssignments{},
+			lastUpdateStDefaultCPUSet:     cpuset.New(),
+			expectStAssignments:           state.ContainerCPUAssignments{},
+			expectStDefaultCPUSet:         cpuset.New(1, 2, 3, 4, 5, 6, 7),
 			expectLastUpdateStAssignments: state.ContainerCPUAssignments{
 				"fakePodAUID": map[string]cpuset.CPUSet{
 					"fakeContainerAName": cpuset.New(1, 2, 3, 4, 5, 6, 7),
@@ -1509,8 +1592,13 @@ func TestReconcileState(t *testing.T) {
 				},
 			},
 			expectLastUpdateStDefaultCPUSet: cpuset.New(),
-			expectSucceededContainerName:    []string{"fakeContainerAName", "fakeContainerBName", "fakeContainerCName"},
-			expectFailedContainerName:       []string{},
+			expectContainerRuntimeState: map[string]cpuset.CPUSet{
+				"fakeContainerAID": cpuset.New(1, 2, 3, 4, 5, 6, 7),
+				"fakeContainerBID": cpuset.New(1, 2, 3, 4, 5, 6, 7),
+				"fakeContainerCID": cpuset.New(1, 2, 3, 4, 5, 6, 7),
+			},
+			expectSucceededContainerName: []string{"fakeContainerAName", "fakeContainerBName", "fakeContainerCName"},
+			expectFailedContainerName:    []string{},
 		},
 	}
 
@@ -1523,8 +1611,13 @@ func TestReconcileState(t *testing.T) {
 				defaultCPUSet: testCase.stDefaultCPUSet,
 			},
 			lastUpdateState: state.NewMemoryState(logger),
-			containerRuntime: mockRuntimeService{
-				err: testCase.updateErr,
+			containerRuntime: &mockRuntimeService{
+				err:                           testCase.updateErr,
+				containerIDsWithExclusiveCPUs: testCase.containerIDsWithExclusiveCPUs,
+				state:                         testCase.containerRuntimeInitialState,
+				testCPUConflicts:              true,
+				testCaseDescription:           testCase.description,
+				t:                             t,
 			},
 			containerMap: containermap.NewContainerMap(),
 			activePods: func() []*v1.Pod {
@@ -1558,6 +1651,11 @@ func TestReconcileState(t *testing.T) {
 		if !reflect.DeepEqual(testCase.expectLastUpdateStDefaultCPUSet, mgr.lastUpdateState.GetDefaultCPUSet()) {
 			t.Errorf("%v", testCase.description)
 			t.Errorf("Expected lastUpdateState default cpuset: %v, actual: %v", testCase.expectLastUpdateStDefaultCPUSet, mgr.lastUpdateState.GetDefaultCPUSet())
+		}
+
+		if !reflect.DeepEqual(testCase.expectContainerRuntimeState, mgr.containerRuntime.(*mockRuntimeService).state) {
+			t.Errorf("%v", testCase.description)
+			t.Errorf("Expected containerRuntimeState: %v, actual: %v", testCase.expectContainerRuntimeState, mgr.containerRuntime.(*mockRuntimeService).state)
 		}
 
 		for _, name := range testCase.expectSucceededContainerName {
@@ -1620,7 +1718,7 @@ func TestCPUManagerAddWithResvList(t *testing.T) {
 		nil)
 	testCases := []struct {
 		description        string
-		updateErr          error
+		updateErr          []error
 		policy             Policy
 		expCPUSet          cpuset.CPUSet
 		expAllocateErr     error
@@ -1644,7 +1742,7 @@ func TestCPUManagerAddWithResvList(t *testing.T) {
 				defaultCPUSet: cpuset.New(0, 1, 2, 3),
 			},
 			lastUpdateState: state.NewMemoryState(logger),
-			containerRuntime: mockRuntimeService{
+			containerRuntime: &mockRuntimeService{
 				err: testCase.updateErr,
 			},
 			containerMap:      containermap.NewContainerMap(),
@@ -1844,7 +1942,7 @@ func TestCPUManagerAddWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) {
 		nil)
 	testCases := []struct {
 		description        string
-		updateErr          error
+		updateErr          []error
 		policy             Policy
 		expCPUSet          cpuset.CPUSet
 		expAllocateErr     error
@@ -1878,7 +1976,7 @@ func TestCPUManagerAddWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) {
 				defaultCPUSet: cpuset.New(1, 2, 3, 4),
 			},
 			lastUpdateState: state.NewMemoryState(logger),
-			containerRuntime: mockRuntimeService{
+			containerRuntime: &mockRuntimeService{
 				err: testCase.updateErr,
 			},
 			containerMap:      containermap.NewContainerMap(),
@@ -2108,7 +2206,7 @@ func TestCPUManagerAddWithInitContainersWithInPlacePodVerticalScalingExclusiveCP
 			policy:            policy,
 			state:             mockState,
 			lastUpdateState:   state.NewMemoryState(logger),
-			containerRuntime:  mockRuntimeService{},
+			containerRuntime:  &mockRuntimeService{},
 			containerMap:      containermap.NewContainerMap(),
 			podStatusProvider: mockPodStatusProvider{},
 			sourcesReady:      &sourcesReadyStub{},
@@ -2294,7 +2392,7 @@ func TestCPUManagerRemoveWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T
 			defaultCPUSet: cpuset.New(),
 		},
 		lastUpdateState:   state.NewMemoryState(logger),
-		containerRuntime:  mockRuntimeService{},
+		containerRuntime:  &mockRuntimeService{},
 		containerMap:      containerMap,
 		activePods:        func() []*v1.Pod { return nil },
 		podStatusProvider: mockPodStatusProvider{},
@@ -2311,7 +2409,7 @@ func TestCPUManagerRemoveWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T
 			err: fmt.Errorf("fake error"),
 		},
 		state:             state.NewMemoryState(logger),
-		containerRuntime:  mockRuntimeService{},
+		containerRuntime:  &mockRuntimeService{},
 		containerMap:      containerMap,
 		activePods:        func() []*v1.Pod { return nil },
 		podStatusProvider: mockPodStatusProvider{},
@@ -2360,7 +2458,9 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 		activePods                      []*v1.Pod
 		pspPS                           v1.PodStatus
 		pspFound                        bool
-		updateErr                       error
+		updateErr                       []error
+		containerIDsWithExclusiveCPUs   []string
+		containerRuntimeInitialState    map[string]cpuset.CPUSet
 		stAllocations                   state.ContainerCPUAllocations
 		stDefaultCPUSet                 cpuset.CPUSet
 		lastUpdateStAllocations         state.ContainerCPUAllocations
@@ -2369,6 +2469,7 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 		expectStDefaultCPUSet           cpuset.CPUSet
 		expectLastUpdateStAllocations   state.ContainerCPUAllocations
 		expectLastUpdateStDefaultCPUSet cpuset.CPUSet
+		expectContainerRuntimeState     map[string]cpuset.CPUSet
 		expectSucceededContainerName    []string
 		expectFailedContainerName       []string
 	}{
@@ -2401,8 +2502,10 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 					},
 				},
 			},
-			pspFound:  true,
-			updateErr: nil,
+			pspFound:                      true,
+			updateErr:                     nil,
+			containerIDsWithExclusiveCPUs: []string{"fakeContainerID"},
+			containerRuntimeInitialState:  map[string]cpuset.CPUSet{},
 			stAllocations: state.ContainerCPUAllocations{
 				"fakePodUID": map[string]state.ContainerCPUAllocation{
 					"fakeContainerName": {Original: cpuset.New(1, 2), Resized: cpuset.New()},
@@ -2423,8 +2526,11 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 				},
 			},
 			expectLastUpdateStDefaultCPUSet: cpuset.New(),
-			expectSucceededContainerName:    []string{"fakeContainerName"},
-			expectFailedContainerName:       []string{},
+			expectContainerRuntimeState: map[string]cpuset.CPUSet{
+				"fakeContainerID": cpuset.New(1, 2),
+			},
+			expectSucceededContainerName: []string{"fakeContainerName"},
+			expectFailedContainerName:    []string{},
 		},
 		{
 			description: "cpu manager reconcile init container - no error",
@@ -2455,8 +2561,10 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 					},
 				},
 			},
-			pspFound:  true,
-			updateErr: nil,
+			pspFound:                      true,
+			updateErr:                     nil,
+			containerIDsWithExclusiveCPUs: []string{"fakeContainerID"},
+			containerRuntimeInitialState:  map[string]cpuset.CPUSet{},
 			stAllocations: state.ContainerCPUAllocations{
 				"fakePodUID": map[string]state.ContainerCPUAllocation{
 					"fakeContainerName": {Original: cpuset.New(1, 2), Resized: cpuset.New()},
@@ -2477,8 +2585,11 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 				},
 			},
 			expectLastUpdateStDefaultCPUSet: cpuset.New(),
-			expectSucceededContainerName:    []string{"fakeContainerName"},
-			expectFailedContainerName:       []string{},
+			expectContainerRuntimeState: map[string]cpuset.CPUSet{
+				"fakeContainerID": cpuset.New(1, 2),
+			},
+			expectSucceededContainerName: []string{"fakeContainerName"},
+			expectFailedContainerName:    []string{},
 		},
 		{
 			description: "cpu manager reconcile - pod status not found",
@@ -2501,6 +2612,8 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 			pspPS:                           v1.PodStatus{},
 			pspFound:                        false,
 			updateErr:                       nil,
+			containerIDsWithExclusiveCPUs:   []string{},
+			containerRuntimeInitialState:    map[string]cpuset.CPUSet{},
 			stAllocations:                   state.ContainerCPUAllocations{},
 			stDefaultCPUSet:                 cpuset.New(),
 			lastUpdateStAllocations:         state.ContainerCPUAllocations{},
@@ -2509,6 +2622,7 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 			expectStDefaultCPUSet:           cpuset.New(),
 			expectLastUpdateStAllocations:   state.ContainerCPUAllocations{},
 			expectLastUpdateStDefaultCPUSet: cpuset.New(),
+			expectContainerRuntimeState:     map[string]cpuset.CPUSet{},
 			expectSucceededContainerName:    []string{},
 			expectFailedContainerName:       []string{},
 		},
@@ -2540,6 +2654,8 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 			},
 			pspFound:                        true,
 			updateErr:                       nil,
+			containerIDsWithExclusiveCPUs:   []string{},
+			containerRuntimeInitialState:    map[string]cpuset.CPUSet{},
 			stAllocations:                   state.ContainerCPUAllocations{},
 			stDefaultCPUSet:                 cpuset.New(),
 			lastUpdateStAllocations:         state.ContainerCPUAllocations{},
@@ -2548,6 +2664,7 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 			expectStDefaultCPUSet:           cpuset.New(),
 			expectLastUpdateStAllocations:   state.ContainerCPUAllocations{},
 			expectLastUpdateStDefaultCPUSet: cpuset.New(),
+			expectContainerRuntimeState:     map[string]cpuset.CPUSet{},
 			expectSucceededContainerName:    []string{},
 			expectFailedContainerName:       []string{},
 		},
@@ -2580,8 +2697,10 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 					},
 				},
 			},
-			pspFound:  true,
-			updateErr: nil,
+			pspFound:                      true,
+			updateErr:                     nil,
+			containerIDsWithExclusiveCPUs: []string{"fakeContainerID"},
+			containerRuntimeInitialState:  map[string]cpuset.CPUSet{},
 			stAllocations: state.ContainerCPUAllocations{
 				"fakePodUID": map[string]state.ContainerCPUAllocation{
 					"fakeContainerName": {Original: cpuset.New(), Resized: cpuset.New()},
@@ -2598,6 +2717,7 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 			expectStDefaultCPUSet:           cpuset.New(1, 2, 3, 4, 5, 6, 7),
 			expectLastUpdateStAllocations:   state.ContainerCPUAllocations{},
 			expectLastUpdateStDefaultCPUSet: cpuset.New(),
+			expectContainerRuntimeState:     map[string]cpuset.CPUSet{},
 			expectSucceededContainerName:    []string{},
 			expectFailedContainerName:       []string{"fakeContainerName"},
 		},
@@ -2630,8 +2750,10 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 					},
 				},
 			},
-			pspFound:  true,
-			updateErr: fmt.Errorf("fake container update error"),
+			pspFound:                      true,
+			updateErr:                     []error{fmt.Errorf("fake container update error")},
+			containerIDsWithExclusiveCPUs: []string{"fakeContainerID"},
+			containerRuntimeInitialState:  map[string]cpuset.CPUSet{},
 			stAllocations: state.ContainerCPUAllocations{
 				"fakePodUID": map[string]state.ContainerCPUAllocation{
 					"fakeContainerName": {Original: cpuset.New(1, 2), Resized: cpuset.New()},
@@ -2648,6 +2770,7 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 			expectStDefaultCPUSet:           cpuset.New(3, 4, 5, 6, 7),
 			expectLastUpdateStAllocations:   state.ContainerCPUAllocations{},
 			expectLastUpdateStDefaultCPUSet: cpuset.New(),
+			expectContainerRuntimeState:     map[string]cpuset.CPUSet{},
 			expectSucceededContainerName:    []string{},
 			expectFailedContainerName:       []string{"fakeContainerName"},
 		},
@@ -2680,8 +2803,10 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 					},
 				},
 			},
-			pspFound:  true,
-			updateErr: nil,
+			pspFound:                      true,
+			updateErr:                     nil,
+			containerIDsWithExclusiveCPUs: []string{"fakeContainerID"},
+			containerRuntimeInitialState:  map[string]cpuset.CPUSet{},
 			stAllocations: state.ContainerCPUAllocations{
 				"fakePodUID": map[string]state.ContainerCPUAllocation{
 					"fakeContainerName": {Original: cpuset.New(1, 2), Resized: cpuset.New()},
@@ -2705,8 +2830,11 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 				},
 			},
 			expectLastUpdateStDefaultCPUSet: cpuset.New(),
-			expectSucceededContainerName:    []string{"fakeContainerName"},
-			expectFailedContainerName:       []string{},
+			expectContainerRuntimeState: map[string]cpuset.CPUSet{
+				"fakeContainerID": cpuset.New(1, 2),
+			},
+			expectSucceededContainerName: []string{"fakeContainerName"},
+			expectFailedContainerName:    []string{},
 		},
 		{
 			description: "cpu manager reconcile - last update state is current",
@@ -2737,8 +2865,12 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 					},
 				},
 			},
-			pspFound:  true,
-			updateErr: nil,
+			pspFound:                      true,
+			updateErr:                     nil,
+			containerIDsWithExclusiveCPUs: []string{"fakeContainerID"},
+			containerRuntimeInitialState: map[string]cpuset.CPUSet{
+				"fakeContainerID": cpuset.New(1, 2),
+			},
 			stAllocations: state.ContainerCPUAllocations{
 				"fakePodUID": map[string]state.ContainerCPUAllocation{
 					"fakeContainerName": {Original: cpuset.New(1, 2), Resized: cpuset.New()},
@@ -2763,8 +2895,11 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 				},
 			},
 			expectLastUpdateStDefaultCPUSet: cpuset.New(),
-			expectSucceededContainerName:    []string{"fakeContainerName"},
-			expectFailedContainerName:       []string{},
+			expectContainerRuntimeState: map[string]cpuset.CPUSet{
+				"fakeContainerID": cpuset.New(1, 2),
+			},
+			expectSucceededContainerName: []string{"fakeContainerName"},
+			expectFailedContainerName:    []string{},
 		},
 		{
 			description: "cpu manager reconcile - last update state is not current",
@@ -2795,8 +2930,12 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 					},
 				},
 			},
-			pspFound:  true,
-			updateErr: nil,
+			pspFound:                      true,
+			updateErr:                     nil,
+			containerIDsWithExclusiveCPUs: []string{"fakeContainerID"},
+			containerRuntimeInitialState: map[string]cpuset.CPUSet{
+				"fakeContainerID": cpuset.New(3, 4),
+			},
 			stAllocations: state.ContainerCPUAllocations{
 				"fakePodUID": map[string]state.ContainerCPUAllocation{
 					"fakeContainerName": {Original: cpuset.New(1, 2), Resized: cpuset.New()},
@@ -2821,11 +2960,14 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 				},
 			},
 			expectLastUpdateStDefaultCPUSet: cpuset.New(),
-			expectSucceededContainerName:    []string{"fakeContainerName"},
-			expectFailedContainerName:       []string{},
+			expectContainerRuntimeState: map[string]cpuset.CPUSet{
+				"fakeContainerID": cpuset.New(1, 2),
+			},
+			expectSucceededContainerName: []string{"fakeContainerName"},
+			expectFailedContainerName:    []string{},
 		},
 		{
-			description: "cpu manager reconcile default CPU sets - no error",
+			description: "cpu manager reconcile - default CPU sets no error",
 			policy:      testPolicy,
 			activePods: []*v1.Pod{
 				{
@@ -2893,14 +3035,16 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 					},
 				},
 			},
-			pspFound:                  true,
-			updateErr:                 nil,
-			stAllocations:             state.ContainerCPUAllocations{},
-			stDefaultCPUSet:           cpuset.New(1, 2, 3, 4, 5, 6, 7),
-			lastUpdateStAllocations:   state.ContainerCPUAllocations{},
-			lastUpdateStDefaultCPUSet: cpuset.New(),
-			expectStAllocations:       state.ContainerCPUAllocations{},
-			expectStDefaultCPUSet:     cpuset.New(1, 2, 3, 4, 5, 6, 7),
+			pspFound:                      true,
+			updateErr:                     nil,
+			containerIDsWithExclusiveCPUs: []string{},
+			containerRuntimeInitialState:  map[string]cpuset.CPUSet{},
+			stAllocations:                 state.ContainerCPUAllocations{},
+			stDefaultCPUSet:               cpuset.New(1, 2, 3, 4, 5, 6, 7),
+			lastUpdateStAllocations:       state.ContainerCPUAllocations{},
+			lastUpdateStDefaultCPUSet:     cpuset.New(),
+			expectStAllocations:           state.ContainerCPUAllocations{},
+			expectStDefaultCPUSet:         cpuset.New(1, 2, 3, 4, 5, 6, 7),
 			expectLastUpdateStAllocations: state.ContainerCPUAllocations{
 				"fakePodAUID": map[string]state.ContainerCPUAllocation{
 					"fakeContainerAName": {Original: cpuset.New(1, 2, 3, 4, 5, 6, 7), Resized: cpuset.New()},
@@ -2913,8 +3057,13 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 				},
 			},
 			expectLastUpdateStDefaultCPUSet: cpuset.New(),
-			expectSucceededContainerName:    []string{"fakeContainerAName", "fakeContainerBName", "fakeContainerCName"},
-			expectFailedContainerName:       []string{},
+			expectContainerRuntimeState: map[string]cpuset.CPUSet{
+				"fakeContainerAID": cpuset.New(1, 2, 3, 4, 5, 6, 7),
+				"fakeContainerBID": cpuset.New(1, 2, 3, 4, 5, 6, 7),
+				"fakeContainerCID": cpuset.New(1, 2, 3, 4, 5, 6, 7),
+			},
+			expectSucceededContainerName: []string{"fakeContainerAName", "fakeContainerBName", "fakeContainerCName"},
+			expectFailedContainerName:    []string{},
 		},
 	}
 
@@ -2927,8 +3076,13 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 				defaultCPUSet: testCase.stDefaultCPUSet,
 			},
 			lastUpdateState: state.NewMemoryState(logger),
-			containerRuntime: mockRuntimeService{
-				err: testCase.updateErr,
+			containerRuntime: &mockRuntimeService{
+				err:                           testCase.updateErr,
+				containerIDsWithExclusiveCPUs: testCase.containerIDsWithExclusiveCPUs,
+				state:                         testCase.containerRuntimeInitialState,
+				testCPUConflicts:              true,
+				testCaseDescription:           testCase.description,
+				t:                             t,
 			},
 			containerMap: containermap.NewContainerMap(),
 			activePods: func() []*v1.Pod {
@@ -2964,6 +3118,11 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 		if !reflect.DeepEqual(testCase.expectLastUpdateStDefaultCPUSet, mgr.lastUpdateState.GetDefaultCPUSet()) {
 			t.Errorf("%v", testCase.description)
 			t.Errorf("Expected lastUpdateState default cpuset: %v, actual: %v", testCase.expectLastUpdateStDefaultCPUSet, mgr.lastUpdateState.GetDefaultCPUSet())
+		}
+
+		if !reflect.DeepEqual(testCase.expectContainerRuntimeState, mgr.containerRuntime.(*mockRuntimeService).state) {
+			t.Errorf("%v", testCase.description)
+			t.Errorf("Expected containerRuntimeState: %v, actual: %v", testCase.expectContainerRuntimeState, mgr.containerRuntime.(*mockRuntimeService).state)
 		}
 
 		for _, name := range testCase.expectSucceededContainerName {
@@ -3026,7 +3185,7 @@ func TestCPUManagerAddWithResvListWithInPlacePodVerticalScalingExclusiveCPUs(t *
 		nil)
 	testCases := []struct {
 		description        string
-		updateErr          error
+		updateErr          []error
 		policy             Policy
 		expCPUSet          cpuset.CPUSet
 		expAllocateErr     error
@@ -3050,7 +3209,7 @@ func TestCPUManagerAddWithResvListWithInPlacePodVerticalScalingExclusiveCPUs(t *
 				defaultCPUSet: cpuset.New(0, 1, 2, 3),
 			},
 			lastUpdateState: state.NewMemoryState(logger),
-			containerRuntime: mockRuntimeService{
+			containerRuntime: &mockRuntimeService{
 				err: testCase.updateErr,
 			},
 			containerMap:      containermap.NewContainerMap(),
