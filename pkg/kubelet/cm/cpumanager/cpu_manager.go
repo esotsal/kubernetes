@@ -583,7 +583,7 @@ func (m *manager) reconcileState(ctx context.Context) (success []reconciledConta
 			// Check if update is needed
 			if !targetCPUSet.Equals(lcset) {
 				if !preliminary && !targetCPUSet.Intersection(failedContainersCPUSet).IsEmpty() {
-					logger.Error(fmt.Errorf("Conflict with previously failed container CPUSet updates"), "failed to update container", "containerID", rca.containerID, "cpuSet", rca.allocatedSet)
+					logger.Error(fmt.Errorf("conflict with previously failed container CPUSet updates"), "failed to update container", "containerID", rca.containerID, "cpuSet", rca.allocatedSet)
 					failure = append(failure, rca.reconciledContainer)
 					failedContainersCPUSet = failedContainersCPUSet.Union(lcset)
 					continue
