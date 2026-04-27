@@ -1672,9 +1672,9 @@ func TestReconcileState(t *testing.T) {
 			pspFound: true,
 			updateErr: []error{
 				fmt.Errorf("fakeContainerAID pass 1 error"),
-				nil, //fakeContainerCID pass 1 ok
-				nil, //fakeContainerBID pass 2 ok
-				nil, //fakeContainerCID pass 3 ok
+				nil, // fakeContainerCID pass 1 ok
+				nil, // fakeContainerBID pass 2 ok
+				nil, // fakeContainerCID pass 3 ok
 			},
 			containerIDsWithExclusiveCPUs: []string{"fakeContainerAID", "fakeContainerCID"},
 			containerRuntimeInitialState: map[string]cpuset.CPUSet{
@@ -1804,8 +1804,8 @@ func TestReconcileState(t *testing.T) {
 			pspFound: true,
 			updateErr: []error{
 				fmt.Errorf("fakeContainerAID pass 1 error"),
-				nil, //fakeContainerCID pass 1 ok
-				nil, //fakeContainerCID pass 3 ok
+				nil, // fakeContainerCID pass 1 ok
+				nil, // fakeContainerCID pass 3 ok
 			},
 			containerIDsWithExclusiveCPUs: []string{"fakeContainerAID", "fakeContainerCID"},
 			containerRuntimeInitialState: map[string]cpuset.CPUSet{
@@ -1935,7 +1935,7 @@ func TestReconcileState(t *testing.T) {
 			pspFound: true,
 			updateErr: []error{
 				fmt.Errorf("fakeContainerAID pass 1 error"),
-				nil, //fakeContainerCID pass 1 ok
+				nil, // fakeContainerCID pass 1 ok
 			},
 			containerIDsWithExclusiveCPUs: []string{"fakeContainerAID", "fakeContainerCID"},
 			containerRuntimeInitialState: map[string]cpuset.CPUSet{
@@ -2065,8 +2065,8 @@ func TestReconcileState(t *testing.T) {
 			pspFound: true,
 			updateErr: []error{
 				fmt.Errorf("fakeContainerAID pass 1 error"),
-				nil, //fakeContainerCID pass 1 ok
-				nil, //fakeContainerBID pass 2 ok
+				nil, // fakeContainerCID pass 1 ok
+				nil, // fakeContainerBID pass 2 ok
 			},
 			containerIDsWithExclusiveCPUs: []string{"fakeContainerAID", "fakeContainerCID"},
 			containerRuntimeInitialState: map[string]cpuset.CPUSet{
@@ -2195,10 +2195,10 @@ func TestReconcileState(t *testing.T) {
 			},
 			pspFound: true,
 			updateErr: []error{
-				nil, //fakeContainerAID pass 1 ok
-				nil, //fakeContainerCID pass 1 ok
+				nil, // fakeContainerAID pass 1 ok
+				nil, // fakeContainerCID pass 1 ok
 				fmt.Errorf("fakeContainerBID pass 2 error"),
-				nil, //fakeContainerAID pass 3 ok
+				nil, // fakeContainerAID pass 3 ok
 			},
 			containerIDsWithExclusiveCPUs: []string{"fakeContainerAID", "fakeContainerCID"},
 			containerRuntimeInitialState: map[string]cpuset.CPUSet{
@@ -4260,9 +4260,9 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 			pspFound: true,
 			updateErr: []error{
 				fmt.Errorf("fakeContainerAID pass 1 error"),
-				nil, //fakeContainerCID pass 1 ok
-				nil, //fakeContainerBID pass 2 ok
-				nil, //fakeContainerCID pass 3 ok
+				nil, // fakeContainerCID pass 1 ok
+				nil, // fakeContainerBID pass 2 ok
+				nil, // fakeContainerCID pass 3 ok
 			},
 			containerIDsWithExclusiveCPUs: []string{"fakeContainerAID", "fakeContainerCID"},
 			containerRuntimeInitialState: map[string]cpuset.CPUSet{
@@ -4392,8 +4392,8 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 			pspFound: true,
 			updateErr: []error{
 				fmt.Errorf("fakeContainerAID pass 1 error"),
-				nil, //fakeContainerCID pass 1 ok
-				nil, //fakeContainerCID pass 3 ok
+				nil, // fakeContainerCID pass 1 ok
+				nil, // fakeContainerCID pass 3 ok
 			},
 			containerIDsWithExclusiveCPUs: []string{"fakeContainerAID", "fakeContainerCID"},
 			containerRuntimeInitialState: map[string]cpuset.CPUSet{
@@ -4523,7 +4523,7 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 			pspFound: true,
 			updateErr: []error{
 				fmt.Errorf("fakeContainerAID pass 1 error"),
-				nil, //fakeContainerCID pass 1 ok
+				nil, // fakeContainerCID pass 1 ok
 			},
 			containerIDsWithExclusiveCPUs: []string{"fakeContainerAID", "fakeContainerCID"},
 			containerRuntimeInitialState: map[string]cpuset.CPUSet{
@@ -4653,8 +4653,8 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 			pspFound: true,
 			updateErr: []error{
 				fmt.Errorf("fakeContainerAID pass 1 error"),
-				nil, //fakeContainerCID pass 1 ok
-				nil, //fakeContainerBID pass 2 ok
+				nil, // fakeContainerCID pass 1 ok
+				nil, // fakeContainerBID pass 2 ok
 			},
 			containerIDsWithExclusiveCPUs: []string{"fakeContainerAID", "fakeContainerCID"},
 			containerRuntimeInitialState: map[string]cpuset.CPUSet{
@@ -4783,10 +4783,10 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 			},
 			pspFound: true,
 			updateErr: []error{
-				nil, //fakeContainerAID pass 1 ok
-				nil, //fakeContainerCID pass 1 ok
+				nil, // fakeContainerAID pass 1 ok
+				nil, // fakeContainerCID pass 1 ok
 				fmt.Errorf("fakeContainerBID pass 2 error"),
-				nil, //fakeContainerAID pass 3 ok
+				nil, // fakeContainerAID pass 3 ok
 			},
 			containerIDsWithExclusiveCPUs: []string{"fakeContainerAID", "fakeContainerCID"},
 			containerRuntimeInitialState: map[string]cpuset.CPUSet{
