@@ -1600,8 +1600,663 @@ func TestReconcileState(t *testing.T) {
 			expectSucceededContainerName: []string{"fakeContainerAName", "fakeContainerBName", "fakeContainerCName"},
 			expectFailedContainerName:    []string{},
 		},
+		{
+			description: "cpu manager reconcile - fail in first reconcile pass does not cause conflict",
+			policy:      testPolicy,
+			activePods: []*v1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodAName",
+						UID:  "fakePodAUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerAName",
+							},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodBName",
+						UID:  "fakePodBUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerBName",
+							},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodCName",
+						UID:  "fakePodCUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerCName",
+							},
+						},
+					},
+				},
+			},
+			pspPS: v1.PodStatus{
+				ContainerStatuses: []v1.ContainerStatus{
+					{
+						Name:        "fakeContainerAName",
+						ContainerID: "docker://fakeContainerAID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+					{
+						Name:        "fakeContainerBName",
+						ContainerID: "docker://fakeContainerBID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+					{
+						Name:        "fakeContainerCName",
+						ContainerID: "docker://fakeContainerCID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+				},
+			},
+			pspFound: true,
+			updateErr: []error{
+				fmt.Errorf("fakeContainerAID pass 1 error"),
+				nil, //fakeContainerCID pass 1 ok
+				nil, //fakeContainerBID pass 2 ok
+				nil, //fakeContainerCID pass 3 ok
+			},
+			containerIDsWithExclusiveCPUs: []string{"fakeContainerAID", "fakeContainerCID"},
+			containerRuntimeInitialState: map[string]cpuset.CPUSet{
+				"fakeContainerAID": cpuset.New(0, 1, 2),
+				"fakeContainerBID": cpuset.New(3, 4, 5),
+				"fakeContainerCID": cpuset.New(6, 7, 8),
+			},
+			stAssignments: state.ContainerCPUAssignments{
+				"fakePodAUID": map[string]cpuset.CPUSet{
+					"fakeContainerAName": cpuset.New(0, 3, 6),
+				},
+				"fakePodCUID": map[string]cpuset.CPUSet{
+					"fakeContainerCName": cpuset.New(5, 8),
+				},
+			},
+			stDefaultCPUSet: cpuset.New(4, 7),
+			lastUpdateStAssignments: state.ContainerCPUAssignments{
+				"fakePodAUID": map[string]cpuset.CPUSet{
+					"fakeContainerAName": cpuset.New(0, 1, 2),
+				},
+				"fakePodBUID": map[string]cpuset.CPUSet{
+					"fakeContainerBName": cpuset.New(3, 4, 5),
+				},
+				"fakePodCUID": map[string]cpuset.CPUSet{
+					"fakeContainerCName": cpuset.New(6, 7, 8),
+				},
+			},
+			lastUpdateStDefaultCPUSet: cpuset.New(),
+			expectStAssignments: state.ContainerCPUAssignments{
+				"fakePodAUID": map[string]cpuset.CPUSet{
+					"fakeContainerAName": cpuset.New(0, 3, 6),
+				},
+				"fakePodCUID": map[string]cpuset.CPUSet{
+					"fakeContainerCName": cpuset.New(5, 8),
+				},
+			},
+			expectStDefaultCPUSet: cpuset.New(4, 7),
+			expectLastUpdateStAssignments: state.ContainerCPUAssignments{
+				"fakePodAUID": map[string]cpuset.CPUSet{
+					"fakeContainerAName": cpuset.New(0, 1, 2),
+				},
+				"fakePodBUID": map[string]cpuset.CPUSet{
+					"fakeContainerBName": cpuset.New(4, 7),
+				},
+				"fakePodCUID": map[string]cpuset.CPUSet{
+					"fakeContainerCName": cpuset.New(5, 8),
+				},
+			},
+			expectLastUpdateStDefaultCPUSet: cpuset.New(),
+			expectContainerRuntimeState: map[string]cpuset.CPUSet{
+				"fakeContainerAID": cpuset.New(0, 1, 2),
+				"fakeContainerBID": cpuset.New(4, 7),
+				"fakeContainerCID": cpuset.New(5, 8),
+			},
+			expectSucceededContainerName: []string{"fakeContainerBName", "fakeContainerCName"},
+			expectFailedContainerName:    []string{"fakeContainerAName"},
+		},
+		{
+			description: "cpu manager reconcile - fail in first reconcile pass causes conflict in second pass",
+			policy:      testPolicy,
+			activePods: []*v1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodAName",
+						UID:  "fakePodAUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerAName",
+							},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodBName",
+						UID:  "fakePodBUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerBName",
+							},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodCName",
+						UID:  "fakePodCUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerCName",
+							},
+						},
+					},
+				},
+			},
+			pspPS: v1.PodStatus{
+				ContainerStatuses: []v1.ContainerStatus{
+					{
+						Name:        "fakeContainerAName",
+						ContainerID: "docker://fakeContainerAID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+					{
+						Name:        "fakeContainerBName",
+						ContainerID: "docker://fakeContainerBID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+					{
+						Name:        "fakeContainerCName",
+						ContainerID: "docker://fakeContainerCID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+				},
+			},
+			pspFound: true,
+			updateErr: []error{
+				fmt.Errorf("fakeContainerAID pass 1 error"),
+				nil, //fakeContainerCID pass 1 ok
+				nil, //fakeContainerCID pass 3 ok
+			},
+			containerIDsWithExclusiveCPUs: []string{"fakeContainerAID", "fakeContainerCID"},
+			containerRuntimeInitialState: map[string]cpuset.CPUSet{
+				"fakeContainerAID": cpuset.New(0, 1, 2),
+				"fakeContainerBID": cpuset.New(3, 4, 5),
+				"fakeContainerCID": cpuset.New(6, 7, 8),
+			},
+			stAssignments: state.ContainerCPUAssignments{
+				"fakePodAUID": map[string]cpuset.CPUSet{
+					"fakeContainerAName": cpuset.New(0, 3, 6),
+				},
+				"fakePodCUID": map[string]cpuset.CPUSet{
+					"fakeContainerCName": cpuset.New(8),
+				},
+			},
+			stDefaultCPUSet: cpuset.New(1, 4, 7),
+			lastUpdateStAssignments: state.ContainerCPUAssignments{
+				"fakePodAUID": map[string]cpuset.CPUSet{
+					"fakeContainerAName": cpuset.New(0, 1, 2),
+				},
+				"fakePodBUID": map[string]cpuset.CPUSet{
+					"fakeContainerBName": cpuset.New(3, 4, 5),
+				},
+				"fakePodCUID": map[string]cpuset.CPUSet{
+					"fakeContainerCName": cpuset.New(6, 7, 8),
+				},
+			},
+			lastUpdateStDefaultCPUSet: cpuset.New(),
+			expectStAssignments: state.ContainerCPUAssignments{
+				"fakePodAUID": map[string]cpuset.CPUSet{
+					"fakeContainerAName": cpuset.New(0, 3, 6),
+				},
+				"fakePodCUID": map[string]cpuset.CPUSet{
+					"fakeContainerCName": cpuset.New(8),
+				},
+			},
+			expectStDefaultCPUSet: cpuset.New(1, 4, 7),
+			expectLastUpdateStAssignments: state.ContainerCPUAssignments{
+				"fakePodAUID": map[string]cpuset.CPUSet{
+					"fakeContainerAName": cpuset.New(0, 1, 2),
+				},
+				"fakePodBUID": map[string]cpuset.CPUSet{
+					"fakeContainerBName": cpuset.New(3, 4, 5),
+				},
+				"fakePodCUID": map[string]cpuset.CPUSet{
+					"fakeContainerCName": cpuset.New(8),
+				},
+			},
+			expectLastUpdateStDefaultCPUSet: cpuset.New(),
+			expectContainerRuntimeState: map[string]cpuset.CPUSet{
+				"fakeContainerAID": cpuset.New(0, 1, 2),
+				"fakeContainerBID": cpuset.New(3, 4, 5),
+				"fakeContainerCID": cpuset.New(8),
+			},
+			expectSucceededContainerName: []string{"fakeContainerCName"},
+			expectFailedContainerName:    []string{"fakeContainerAName", "fakeContainerBName"},
+		},
+		{
+			description: "cpu manager reconcile - fail in first reconcile pass causes conflict in second pass which causes conflict in third pass",
+			policy:      testPolicy,
+			activePods: []*v1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodAName",
+						UID:  "fakePodAUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerAName",
+							},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodBName",
+						UID:  "fakePodBUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerBName",
+							},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodCName",
+						UID:  "fakePodCUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerCName",
+							},
+						},
+					},
+				},
+			},
+			pspPS: v1.PodStatus{
+				ContainerStatuses: []v1.ContainerStatus{
+					{
+						Name:        "fakeContainerAName",
+						ContainerID: "docker://fakeContainerAID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+					{
+						Name:        "fakeContainerBName",
+						ContainerID: "docker://fakeContainerBID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+					{
+						Name:        "fakeContainerCName",
+						ContainerID: "docker://fakeContainerCID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+				},
+			},
+			pspFound: true,
+			updateErr: []error{
+				fmt.Errorf("fakeContainerAID pass 1 error"),
+				nil, //fakeContainerCID pass 1 ok
+			},
+			containerIDsWithExclusiveCPUs: []string{"fakeContainerAID", "fakeContainerCID"},
+			containerRuntimeInitialState: map[string]cpuset.CPUSet{
+				"fakeContainerAID": cpuset.New(0, 1, 2),
+				"fakeContainerBID": cpuset.New(3, 4, 5),
+				"fakeContainerCID": cpuset.New(6, 7, 8),
+			},
+			stAssignments: state.ContainerCPUAssignments{
+				"fakePodAUID": map[string]cpuset.CPUSet{
+					"fakeContainerAName": cpuset.New(0, 3, 6),
+				},
+				"fakePodCUID": map[string]cpuset.CPUSet{
+					"fakeContainerCName": cpuset.New(5, 8),
+				},
+			},
+			stDefaultCPUSet: cpuset.New(1, 4, 7),
+			lastUpdateStAssignments: state.ContainerCPUAssignments{
+				"fakePodAUID": map[string]cpuset.CPUSet{
+					"fakeContainerAName": cpuset.New(0, 1, 2),
+				},
+				"fakePodBUID": map[string]cpuset.CPUSet{
+					"fakeContainerBName": cpuset.New(3, 4, 5),
+				},
+				"fakePodCUID": map[string]cpuset.CPUSet{
+					"fakeContainerCName": cpuset.New(6, 7, 8),
+				},
+			},
+			lastUpdateStDefaultCPUSet: cpuset.New(),
+			expectStAssignments: state.ContainerCPUAssignments{
+				"fakePodAUID": map[string]cpuset.CPUSet{
+					"fakeContainerAName": cpuset.New(0, 3, 6),
+				},
+				"fakePodCUID": map[string]cpuset.CPUSet{
+					"fakeContainerCName": cpuset.New(5, 8),
+				},
+			},
+			expectStDefaultCPUSet: cpuset.New(1, 4, 7),
+			expectLastUpdateStAssignments: state.ContainerCPUAssignments{
+				"fakePodAUID": map[string]cpuset.CPUSet{
+					"fakeContainerAName": cpuset.New(0, 1, 2),
+				},
+				"fakePodBUID": map[string]cpuset.CPUSet{
+					"fakeContainerBName": cpuset.New(3, 4, 5),
+				},
+				"fakePodCUID": map[string]cpuset.CPUSet{
+					"fakeContainerCName": cpuset.New(8),
+				},
+			},
+			expectLastUpdateStDefaultCPUSet: cpuset.New(),
+			expectContainerRuntimeState: map[string]cpuset.CPUSet{
+				"fakeContainerAID": cpuset.New(0, 1, 2),
+				"fakeContainerBID": cpuset.New(3, 4, 5),
+				"fakeContainerCID": cpuset.New(8),
+			},
+			expectSucceededContainerName: []string{},
+			expectFailedContainerName:    []string{"fakeContainerAName", "fakeContainerBName", "fakeContainerCName"},
+		},
+		{
+			description: "cpu manager reconcile - fail in first reconcile pass causes conflict in third pass",
+			policy:      testPolicy,
+			activePods: []*v1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodAName",
+						UID:  "fakePodAUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerAName",
+							},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodBName",
+						UID:  "fakePodBUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerBName",
+							},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodCName",
+						UID:  "fakePodCUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerCName",
+							},
+						},
+					},
+				},
+			},
+			pspPS: v1.PodStatus{
+				ContainerStatuses: []v1.ContainerStatus{
+					{
+						Name:        "fakeContainerAName",
+						ContainerID: "docker://fakeContainerAID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+					{
+						Name:        "fakeContainerBName",
+						ContainerID: "docker://fakeContainerBID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+					{
+						Name:        "fakeContainerCName",
+						ContainerID: "docker://fakeContainerCID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+				},
+			},
+			pspFound: true,
+			updateErr: []error{
+				fmt.Errorf("fakeContainerAID pass 1 error"),
+				nil, //fakeContainerCID pass 1 ok
+				nil, //fakeContainerBID pass 2 ok
+			},
+			containerIDsWithExclusiveCPUs: []string{"fakeContainerAID", "fakeContainerCID"},
+			containerRuntimeInitialState: map[string]cpuset.CPUSet{
+				"fakeContainerAID": cpuset.New(0, 1, 2),
+				"fakeContainerBID": cpuset.New(3, 4, 5),
+				"fakeContainerCID": cpuset.New(6, 7, 8),
+			},
+			stAssignments: state.ContainerCPUAssignments{
+				"fakePodAUID": map[string]cpuset.CPUSet{
+					"fakeContainerAName": cpuset.New(0, 3, 6),
+				},
+				"fakePodCUID": map[string]cpuset.CPUSet{
+					"fakeContainerCName": cpuset.New(2, 5, 8),
+				},
+			},
+			stDefaultCPUSet: cpuset.New(4, 7),
+			lastUpdateStAssignments: state.ContainerCPUAssignments{
+				"fakePodAUID": map[string]cpuset.CPUSet{
+					"fakeContainerAName": cpuset.New(0, 1, 2),
+				},
+				"fakePodBUID": map[string]cpuset.CPUSet{
+					"fakeContainerBName": cpuset.New(3, 4, 5),
+				},
+				"fakePodCUID": map[string]cpuset.CPUSet{
+					"fakeContainerCName": cpuset.New(6, 7, 8),
+				},
+			},
+			lastUpdateStDefaultCPUSet: cpuset.New(),
+			expectStAssignments: state.ContainerCPUAssignments{
+				"fakePodAUID": map[string]cpuset.CPUSet{
+					"fakeContainerAName": cpuset.New(0, 3, 6),
+				},
+				"fakePodCUID": map[string]cpuset.CPUSet{
+					"fakeContainerCName": cpuset.New(2, 5, 8),
+				},
+			},
+			expectStDefaultCPUSet: cpuset.New(4, 7),
+			expectLastUpdateStAssignments: state.ContainerCPUAssignments{
+				"fakePodAUID": map[string]cpuset.CPUSet{
+					"fakeContainerAName": cpuset.New(0, 1, 2),
+				},
+				"fakePodBUID": map[string]cpuset.CPUSet{
+					"fakeContainerBName": cpuset.New(4, 7),
+				},
+				"fakePodCUID": map[string]cpuset.CPUSet{
+					"fakeContainerCName": cpuset.New(8),
+				},
+			},
+			expectLastUpdateStDefaultCPUSet: cpuset.New(),
+			expectContainerRuntimeState: map[string]cpuset.CPUSet{
+				"fakeContainerAID": cpuset.New(0, 1, 2),
+				"fakeContainerBID": cpuset.New(4, 7),
+				"fakeContainerCID": cpuset.New(8),
+			},
+			expectSucceededContainerName: []string{"fakeContainerBName"},
+			expectFailedContainerName:    []string{"fakeContainerAName", "fakeContainerCName"},
+		},
+		{
+			description: "cpu manager reconcile - fail in second reconcile pass causes conflict in third pass",
+			policy:      testPolicy,
+			activePods: []*v1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodAName",
+						UID:  "fakePodAUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerAName",
+							},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodBName",
+						UID:  "fakePodBUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerBName",
+							},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodCName",
+						UID:  "fakePodCUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerCName",
+							},
+						},
+					},
+				},
+			},
+			pspPS: v1.PodStatus{
+				ContainerStatuses: []v1.ContainerStatus{
+					{
+						Name:        "fakeContainerAName",
+						ContainerID: "docker://fakeContainerAID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+					{
+						Name:        "fakeContainerBName",
+						ContainerID: "docker://fakeContainerBID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+					{
+						Name:        "fakeContainerCName",
+						ContainerID: "docker://fakeContainerCID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+				},
+			},
+			pspFound: true,
+			updateErr: []error{
+				nil, //fakeContainerAID pass 1 ok
+				nil, //fakeContainerCID pass 1 ok
+				fmt.Errorf("fakeContainerBID pass 2 error"),
+				nil, //fakeContainerAID pass 3 ok
+			},
+			containerIDsWithExclusiveCPUs: []string{"fakeContainerAID", "fakeContainerCID"},
+			containerRuntimeInitialState: map[string]cpuset.CPUSet{
+				"fakeContainerAID": cpuset.New(0, 1, 2),
+				"fakeContainerBID": cpuset.New(3, 4, 5),
+				"fakeContainerCID": cpuset.New(6, 7, 8),
+			},
+			stAssignments: state.ContainerCPUAssignments{
+				"fakePodAUID": map[string]cpuset.CPUSet{
+					"fakeContainerAName": cpuset.New(0, 6),
+				},
+				"fakePodCUID": map[string]cpuset.CPUSet{
+					"fakeContainerCName": cpuset.New(2, 5, 8),
+				},
+			},
+			stDefaultCPUSet: cpuset.New(1, 4, 7),
+			lastUpdateStAssignments: state.ContainerCPUAssignments{
+				"fakePodAUID": map[string]cpuset.CPUSet{
+					"fakeContainerAName": cpuset.New(0, 1, 2),
+				},
+				"fakePodBUID": map[string]cpuset.CPUSet{
+					"fakeContainerBName": cpuset.New(3, 4, 5),
+				},
+				"fakePodCUID": map[string]cpuset.CPUSet{
+					"fakeContainerCName": cpuset.New(6, 7, 8),
+				},
+			},
+			lastUpdateStDefaultCPUSet: cpuset.New(),
+			expectStAssignments: state.ContainerCPUAssignments{
+				"fakePodAUID": map[string]cpuset.CPUSet{
+					"fakeContainerAName": cpuset.New(0, 6),
+				},
+				"fakePodCUID": map[string]cpuset.CPUSet{
+					"fakeContainerCName": cpuset.New(2, 5, 8),
+				},
+			},
+			expectStDefaultCPUSet: cpuset.New(1, 4, 7),
+			expectLastUpdateStAssignments: state.ContainerCPUAssignments{
+				"fakePodAUID": map[string]cpuset.CPUSet{
+					"fakeContainerAName": cpuset.New(0, 6),
+				},
+				"fakePodBUID": map[string]cpuset.CPUSet{
+					"fakeContainerBName": cpuset.New(3, 4, 5),
+				},
+				"fakePodCUID": map[string]cpuset.CPUSet{
+					"fakeContainerCName": cpuset.New(8),
+				},
+			},
+			expectLastUpdateStDefaultCPUSet: cpuset.New(),
+			expectContainerRuntimeState: map[string]cpuset.CPUSet{
+				"fakeContainerAID": cpuset.New(0, 6),
+				"fakeContainerBID": cpuset.New(3, 4, 5),
+				"fakeContainerCID": cpuset.New(8),
+			},
+			expectSucceededContainerName: []string{"fakeContainerAName"},
+			expectFailedContainerName:    []string{"fakeContainerBName", "fakeContainerCName"},
+		},
 	}
-
 	for _, testCase := range testCases {
 		logger, _ := ktesting.NewTestContext(t)
 		mgr := &manager{
@@ -3532,6 +4187,662 @@ func TestReconcileStateWithInPlacePodVerticalScalingExclusiveCPUs(t *testing.T) 
 			},
 			expectSucceededContainerName: []string{"fakeContainerAName", "fakeContainerBName", "fakeContainerCName"},
 			expectFailedContainerName:    []string{},
+		},
+		{
+			description: "cpu manager reconcile - fail in first reconcile pass does not cause conflict",
+			policy:      testPolicy,
+			activePods: []*v1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodAName",
+						UID:  "fakePodAUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerAName",
+							},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodBName",
+						UID:  "fakePodBUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerBName",
+							},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodCName",
+						UID:  "fakePodCUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerCName",
+							},
+						},
+					},
+				},
+			},
+			pspPS: v1.PodStatus{
+				ContainerStatuses: []v1.ContainerStatus{
+					{
+						Name:        "fakeContainerAName",
+						ContainerID: "docker://fakeContainerAID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+					{
+						Name:        "fakeContainerBName",
+						ContainerID: "docker://fakeContainerBID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+					{
+						Name:        "fakeContainerCName",
+						ContainerID: "docker://fakeContainerCID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+				},
+			},
+			pspFound: true,
+			updateErr: []error{
+				fmt.Errorf("fakeContainerAID pass 1 error"),
+				nil, //fakeContainerCID pass 1 ok
+				nil, //fakeContainerBID pass 2 ok
+				nil, //fakeContainerCID pass 3 ok
+			},
+			containerIDsWithExclusiveCPUs: []string{"fakeContainerAID", "fakeContainerCID"},
+			containerRuntimeInitialState: map[string]cpuset.CPUSet{
+				"fakeContainerAID": cpuset.New(0, 1, 2),
+				"fakeContainerBID": cpuset.New(3, 4, 5),
+				"fakeContainerCID": cpuset.New(6, 7, 8),
+			},
+			stAllocations: state.ContainerCPUAllocations{
+				"fakePodAUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerAName": {Original: cpuset.New(0), Resized: cpuset.New(0, 3, 6)},
+				},
+				"fakePodCUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerCName": {Original: cpuset.New(8), Resized: cpuset.New(5, 8)},
+				},
+			},
+			stDefaultCPUSet: cpuset.New(4, 7),
+			lastUpdateStAllocations: state.ContainerCPUAllocations{
+				"fakePodAUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerAName": {Original: cpuset.New(0), Resized: cpuset.New(0, 1, 2)},
+				},
+				"fakePodBUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerBName": {Original: cpuset.New(4), Resized: cpuset.New(3, 4, 5)},
+				},
+				"fakePodCUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerCName": {Original: cpuset.New(8), Resized: cpuset.New(6, 7, 8)},
+				},
+			},
+			lastUpdateStDefaultCPUSet: cpuset.New(),
+			expectStAllocations: state.ContainerCPUAllocations{
+				"fakePodAUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerAName": {Original: cpuset.New(0), Resized: cpuset.New(0, 3, 6)},
+				},
+				"fakePodCUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerCName": {Original: cpuset.New(8), Resized: cpuset.New(5, 8)},
+				},
+			},
+			expectStDefaultCPUSet: cpuset.New(4, 7),
+			expectLastUpdateStAllocations: state.ContainerCPUAllocations{
+				"fakePodAUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerAName": {Original: cpuset.New(0), Resized: cpuset.New(0, 1, 2)},
+				},
+				"fakePodBUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerBName": {Original: cpuset.New(4), Resized: cpuset.New(4, 7)},
+				},
+				"fakePodCUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerCName": {Original: cpuset.New(8), Resized: cpuset.New(5, 8)},
+				},
+			},
+			expectLastUpdateStDefaultCPUSet: cpuset.New(),
+			expectContainerRuntimeState: map[string]cpuset.CPUSet{
+				"fakeContainerAID": cpuset.New(0, 1, 2),
+				"fakeContainerBID": cpuset.New(4, 7),
+				"fakeContainerCID": cpuset.New(5, 8),
+			},
+			expectSucceededContainerName: []string{"fakeContainerBName", "fakeContainerCName"},
+			expectFailedContainerName:    []string{"fakeContainerAName"},
+		},
+		{
+			description: "cpu manager reconcile - fail in first reconcile pass causes conflict in second pass",
+			policy:      testPolicy,
+			activePods: []*v1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodAName",
+						UID:  "fakePodAUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerAName",
+							},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodBName",
+						UID:  "fakePodBUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerBName",
+							},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodCName",
+						UID:  "fakePodCUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerCName",
+							},
+						},
+					},
+				},
+			},
+			pspPS: v1.PodStatus{
+				ContainerStatuses: []v1.ContainerStatus{
+					{
+						Name:        "fakeContainerAName",
+						ContainerID: "docker://fakeContainerAID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+					{
+						Name:        "fakeContainerBName",
+						ContainerID: "docker://fakeContainerBID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+					{
+						Name:        "fakeContainerCName",
+						ContainerID: "docker://fakeContainerCID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+				},
+			},
+			pspFound: true,
+			updateErr: []error{
+				fmt.Errorf("fakeContainerAID pass 1 error"),
+				nil, //fakeContainerCID pass 1 ok
+				nil, //fakeContainerCID pass 3 ok
+			},
+			containerIDsWithExclusiveCPUs: []string{"fakeContainerAID", "fakeContainerCID"},
+			containerRuntimeInitialState: map[string]cpuset.CPUSet{
+				"fakeContainerAID": cpuset.New(0, 1, 2),
+				"fakeContainerBID": cpuset.New(3, 4, 5),
+				"fakeContainerCID": cpuset.New(6, 7, 8),
+			},
+			stAllocations: state.ContainerCPUAllocations{
+				"fakePodAUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerAName": {Original: cpuset.New(0), Resized: cpuset.New(0, 3, 6)},
+				},
+				"fakePodCUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerCName": {Original: cpuset.New(8), Resized: cpuset.New(8)},
+				},
+			},
+			stDefaultCPUSet: cpuset.New(1, 4, 7),
+			lastUpdateStAllocations: state.ContainerCPUAllocations{
+				"fakePodAUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerAName": {Original: cpuset.New(0), Resized: cpuset.New(0, 1, 2)},
+				},
+				"fakePodBUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerBName": {Original: cpuset.New(4), Resized: cpuset.New(3, 4, 5)},
+				},
+				"fakePodCUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerCName": {Original: cpuset.New(8), Resized: cpuset.New(6, 7, 8)},
+				},
+			},
+			lastUpdateStDefaultCPUSet: cpuset.New(),
+			expectStAllocations: state.ContainerCPUAllocations{
+				"fakePodAUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerAName": {Original: cpuset.New(0), Resized: cpuset.New(0, 3, 6)},
+				},
+				"fakePodCUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerCName": {Original: cpuset.New(8), Resized: cpuset.New(8)},
+				},
+			},
+			expectStDefaultCPUSet: cpuset.New(1, 4, 7),
+			expectLastUpdateStAllocations: state.ContainerCPUAllocations{
+				"fakePodAUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerAName": {Original: cpuset.New(0), Resized: cpuset.New(0, 1, 2)},
+				},
+				"fakePodBUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerBName": {Original: cpuset.New(4), Resized: cpuset.New(3, 4, 5)},
+				},
+				"fakePodCUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerCName": {Original: cpuset.New(8), Resized: cpuset.New(8)},
+				},
+			},
+			expectLastUpdateStDefaultCPUSet: cpuset.New(),
+			expectContainerRuntimeState: map[string]cpuset.CPUSet{
+				"fakeContainerAID": cpuset.New(0, 1, 2),
+				"fakeContainerBID": cpuset.New(3, 4, 5),
+				"fakeContainerCID": cpuset.New(8),
+			},
+			expectSucceededContainerName: []string{"fakeContainerCName"},
+			expectFailedContainerName:    []string{"fakeContainerAName", "fakeContainerBName"},
+		},
+		{
+			description: "cpu manager reconcile - fail in first reconcile pass causes conflict in second pass which causes conflict in third pass",
+			policy:      testPolicy,
+			activePods: []*v1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodAName",
+						UID:  "fakePodAUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerAName",
+							},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodBName",
+						UID:  "fakePodBUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerBName",
+							},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodCName",
+						UID:  "fakePodCUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerCName",
+							},
+						},
+					},
+				},
+			},
+			pspPS: v1.PodStatus{
+				ContainerStatuses: []v1.ContainerStatus{
+					{
+						Name:        "fakeContainerAName",
+						ContainerID: "docker://fakeContainerAID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+					{
+						Name:        "fakeContainerBName",
+						ContainerID: "docker://fakeContainerBID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+					{
+						Name:        "fakeContainerCName",
+						ContainerID: "docker://fakeContainerCID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+				},
+			},
+			pspFound: true,
+			updateErr: []error{
+				fmt.Errorf("fakeContainerAID pass 1 error"),
+				nil, //fakeContainerCID pass 1 ok
+			},
+			containerIDsWithExclusiveCPUs: []string{"fakeContainerAID", "fakeContainerCID"},
+			containerRuntimeInitialState: map[string]cpuset.CPUSet{
+				"fakeContainerAID": cpuset.New(0, 1, 2),
+				"fakeContainerBID": cpuset.New(3, 4, 5),
+				"fakeContainerCID": cpuset.New(6, 7, 8),
+			},
+			stAllocations: state.ContainerCPUAllocations{
+				"fakePodAUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerAName": {Original: cpuset.New(0), Resized: cpuset.New(0, 3, 6)},
+				},
+				"fakePodCUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerCName": {Original: cpuset.New(8), Resized: cpuset.New(5, 8)},
+				},
+			},
+			stDefaultCPUSet: cpuset.New(1, 4, 7),
+			lastUpdateStAllocations: state.ContainerCPUAllocations{
+				"fakePodAUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerAName": {Original: cpuset.New(0), Resized: cpuset.New(0, 1, 2)},
+				},
+				"fakePodBUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerBName": {Original: cpuset.New(4), Resized: cpuset.New(3, 4, 5)},
+				},
+				"fakePodCUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerCName": {Original: cpuset.New(8), Resized: cpuset.New(6, 7, 8)},
+				},
+			},
+			lastUpdateStDefaultCPUSet: cpuset.New(),
+			expectStAllocations: state.ContainerCPUAllocations{
+				"fakePodAUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerAName": {Original: cpuset.New(0), Resized: cpuset.New(0, 3, 6)},
+				},
+				"fakePodCUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerCName": {Original: cpuset.New(8), Resized: cpuset.New(5, 8)},
+				},
+			},
+			expectStDefaultCPUSet: cpuset.New(1, 4, 7),
+			expectLastUpdateStAllocations: state.ContainerCPUAllocations{
+				"fakePodAUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerAName": {Original: cpuset.New(0), Resized: cpuset.New(0, 1, 2)},
+				},
+				"fakePodBUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerBName": {Original: cpuset.New(4), Resized: cpuset.New(3, 4, 5)},
+				},
+				"fakePodCUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerCName": {Original: cpuset.New(8), Resized: cpuset.New(8)},
+				},
+			},
+			expectLastUpdateStDefaultCPUSet: cpuset.New(),
+			expectContainerRuntimeState: map[string]cpuset.CPUSet{
+				"fakeContainerAID": cpuset.New(0, 1, 2),
+				"fakeContainerBID": cpuset.New(3, 4, 5),
+				"fakeContainerCID": cpuset.New(8),
+			},
+			expectSucceededContainerName: []string{},
+			expectFailedContainerName:    []string{"fakeContainerAName", "fakeContainerBName", "fakeContainerCName"},
+		},
+		{
+			description: "cpu manager reconcile - fail in first reconcile pass causes conflict in third pass",
+			policy:      testPolicy,
+			activePods: []*v1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodAName",
+						UID:  "fakePodAUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerAName",
+							},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodBName",
+						UID:  "fakePodBUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerBName",
+							},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodCName",
+						UID:  "fakePodCUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerCName",
+							},
+						},
+					},
+				},
+			},
+			pspPS: v1.PodStatus{
+				ContainerStatuses: []v1.ContainerStatus{
+					{
+						Name:        "fakeContainerAName",
+						ContainerID: "docker://fakeContainerAID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+					{
+						Name:        "fakeContainerBName",
+						ContainerID: "docker://fakeContainerBID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+					{
+						Name:        "fakeContainerCName",
+						ContainerID: "docker://fakeContainerCID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+				},
+			},
+			pspFound: true,
+			updateErr: []error{
+				fmt.Errorf("fakeContainerAID pass 1 error"),
+				nil, //fakeContainerCID pass 1 ok
+				nil, //fakeContainerBID pass 2 ok
+			},
+			containerIDsWithExclusiveCPUs: []string{"fakeContainerAID", "fakeContainerCID"},
+			containerRuntimeInitialState: map[string]cpuset.CPUSet{
+				"fakeContainerAID": cpuset.New(0, 1, 2),
+				"fakeContainerBID": cpuset.New(3, 4, 5),
+				"fakeContainerCID": cpuset.New(6, 7, 8),
+			},
+			stAllocations: state.ContainerCPUAllocations{
+				"fakePodAUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerAName": {Original: cpuset.New(0), Resized: cpuset.New(0, 3, 6)},
+				},
+				"fakePodCUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerCName": {Original: cpuset.New(8), Resized: cpuset.New(2, 5, 8)},
+				},
+			},
+			stDefaultCPUSet: cpuset.New(4, 7),
+			lastUpdateStAllocations: state.ContainerCPUAllocations{
+				"fakePodAUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerAName": {Original: cpuset.New(0), Resized: cpuset.New(0, 1, 2)},
+				},
+				"fakePodBUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerBName": {Original: cpuset.New(4), Resized: cpuset.New(3, 4, 5)},
+				},
+				"fakePodCUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerCName": {Original: cpuset.New(8), Resized: cpuset.New(6, 7, 8)},
+				},
+			},
+			lastUpdateStDefaultCPUSet: cpuset.New(),
+			expectStAllocations: state.ContainerCPUAllocations{
+				"fakePodAUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerAName": {Original: cpuset.New(0), Resized: cpuset.New(0, 3, 6)},
+				},
+				"fakePodCUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerCName": {Original: cpuset.New(8), Resized: cpuset.New(2, 5, 8)},
+				},
+			},
+			expectStDefaultCPUSet: cpuset.New(4, 7),
+			expectLastUpdateStAllocations: state.ContainerCPUAllocations{
+				"fakePodAUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerAName": {Original: cpuset.New(0), Resized: cpuset.New(0, 1, 2)},
+				},
+				"fakePodBUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerBName": {Original: cpuset.New(4), Resized: cpuset.New(4, 7)},
+				},
+				"fakePodCUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerCName": {Original: cpuset.New(8), Resized: cpuset.New(8)},
+				},
+			},
+			expectLastUpdateStDefaultCPUSet: cpuset.New(),
+			expectContainerRuntimeState: map[string]cpuset.CPUSet{
+				"fakeContainerAID": cpuset.New(0, 1, 2),
+				"fakeContainerBID": cpuset.New(4, 7),
+				"fakeContainerCID": cpuset.New(8),
+			},
+			expectSucceededContainerName: []string{"fakeContainerBName"},
+			expectFailedContainerName:    []string{"fakeContainerAName", "fakeContainerCName"},
+		},
+		{
+			description: "cpu manager reconcile - fail in second reconcile pass causes conflict in third pass",
+			policy:      testPolicy,
+			activePods: []*v1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodAName",
+						UID:  "fakePodAUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerAName",
+							},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodBName",
+						UID:  "fakePodBUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerBName",
+							},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "fakePodCName",
+						UID:  "fakePodCUID",
+					},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Name: "fakeContainerCName",
+							},
+						},
+					},
+				},
+			},
+			pspPS: v1.PodStatus{
+				ContainerStatuses: []v1.ContainerStatus{
+					{
+						Name:        "fakeContainerAName",
+						ContainerID: "docker://fakeContainerAID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+					{
+						Name:        "fakeContainerBName",
+						ContainerID: "docker://fakeContainerBID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+					{
+						Name:        "fakeContainerCName",
+						ContainerID: "docker://fakeContainerCID",
+						State: v1.ContainerState{
+							Running: &v1.ContainerStateRunning{},
+						},
+					},
+				},
+			},
+			pspFound: true,
+			updateErr: []error{
+				nil, //fakeContainerAID pass 1 ok
+				nil, //fakeContainerCID pass 1 ok
+				fmt.Errorf("fakeContainerBID pass 2 error"),
+				nil, //fakeContainerAID pass 3 ok
+			},
+			containerIDsWithExclusiveCPUs: []string{"fakeContainerAID", "fakeContainerCID"},
+			containerRuntimeInitialState: map[string]cpuset.CPUSet{
+				"fakeContainerAID": cpuset.New(0, 1, 2),
+				"fakeContainerBID": cpuset.New(3, 4, 5),
+				"fakeContainerCID": cpuset.New(6, 7, 8),
+			},
+			stAllocations: state.ContainerCPUAllocations{
+				"fakePodAUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerAName": {Original: cpuset.New(0), Resized: cpuset.New(0, 6)},
+				},
+				"fakePodCUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerCName": {Original: cpuset.New(8), Resized: cpuset.New(2, 5, 8)},
+				},
+			},
+			stDefaultCPUSet: cpuset.New(1, 4, 7),
+			lastUpdateStAllocations: state.ContainerCPUAllocations{
+				"fakePodAUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerAName": {Original: cpuset.New(0), Resized: cpuset.New(0, 1, 2)},
+				},
+				"fakePodBUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerBName": {Original: cpuset.New(4), Resized: cpuset.New(3, 4, 5)},
+				},
+				"fakePodCUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerCName": {Original: cpuset.New(8), Resized: cpuset.New(6, 7, 8)},
+				},
+			},
+			lastUpdateStDefaultCPUSet: cpuset.New(),
+			expectStAllocations: state.ContainerCPUAllocations{
+				"fakePodAUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerAName": {Original: cpuset.New(0), Resized: cpuset.New(0, 6)},
+				},
+				"fakePodCUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerCName": {Original: cpuset.New(8), Resized: cpuset.New(2, 5, 8)},
+				},
+			},
+			expectStDefaultCPUSet: cpuset.New(1, 4, 7),
+			expectLastUpdateStAllocations: state.ContainerCPUAllocations{
+				"fakePodAUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerAName": {Original: cpuset.New(0), Resized: cpuset.New(0, 6)},
+				},
+				"fakePodBUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerBName": {Original: cpuset.New(4), Resized: cpuset.New(3, 4, 5)},
+				},
+				"fakePodCUID": map[string]state.ContainerCPUAllocation{
+					"fakeContainerCName": {Original: cpuset.New(8), Resized: cpuset.New(8)},
+				},
+			},
+			expectLastUpdateStDefaultCPUSet: cpuset.New(),
+			expectContainerRuntimeState: map[string]cpuset.CPUSet{
+				"fakeContainerAID": cpuset.New(0, 6),
+				"fakeContainerBID": cpuset.New(3, 4, 5),
+				"fakeContainerCID": cpuset.New(8),
+			},
+			expectSucceededContainerName: []string{"fakeContainerAName"},
+			expectFailedContainerName:    []string{"fakeContainerBName", "fakeContainerCName"},
 		},
 	}
 
