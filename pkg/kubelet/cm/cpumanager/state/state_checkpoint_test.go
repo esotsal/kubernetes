@@ -802,19 +802,40 @@ func TestCheckpointStateRestore(t *testing.T) {
 
 func TestCheckpointStateStore(t *testing.T) {
 	testCases := []struct {
-		description   string
-		expectedState *stateMemory
+		description    string
+		fgRequirements FeatureGateCombination
+		expectedState  *stateMemory
 	}{
 		{
-			"Store default cpu set",
-			&stateMemory{defaultCPUSet: cpuset.New(1, 2, 3)},
+			description:    "Store default cpu set",
+			fgRequirements: nil,
+			expectedState:  &stateMemory{defaultCPUSet: cpuset.New(1, 2, 3)},
 		},
 		{
-			"Store assignments",
-			&stateMemory{
+			description:    "Store assignments",
+			fgRequirements: FeatureGateCombination{features.InPlacePodVerticalScalingExclusiveCPUs: false},
+			expectedState: &stateMemory{
 				assignments: map[string]map[string]cpuset.CPUSet{
 					"pod": {
 						"container1": cpuset.New(1, 5, 8),
+					},
+				},
+			},
+		},
+		{
+			description:    "Store originals",
+			fgRequirements: FeatureGateCombination{features.InPlacePodVerticalScalingExclusiveCPUs: true},
+			expectedState: &stateMemory{
+				assignments: map[string]map[string]cpuset.CPUSet{
+					"pod": {
+						"container1": cpuset.New(1, 5, 8),
+					},
+				},
+				originals: ContainerCPUOriginals{
+					"pod": {
+						"container1": {
+							Original: cpuset.New(1, 5),
+						},
 					},
 				},
 			},
@@ -835,28 +856,56 @@ func TestCheckpointStateStore(t *testing.T) {
 		t.Fatalf("could not create testing checkpoint manager: %v", err)
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.description, func(t *testing.T) {
-			// ensure there is no previous checkpoint
-			cpm.RemoveCheckpoint(testingCheckpoint)
-
-			logger, _ := ktesting.NewTestContext(t)
-			cs1, err := NewCheckpointState(logger, testingDir, testingCheckpoint, "none", nil)
-			if err != nil {
-				t.Fatalf("could not create testing checkpointState instance: %v", err)
+	// list of all features verified in this test
+	featureGateList := []featuregate.Feature{
+		features.PodLevelResourceManagers,
+		features.InPlacePodVerticalScalingExclusiveCPUs,
+	}
+	// iterate over all possible enabled/disabled feature combinations
+	for _, fgComb := range allFeatureGateCombinations(featureGateList) {
+		// run all testcases for current feature combination
+		t.Run(describe(fgComb), func(t *testing.T) {
+			for _, key := range slices.Sorted(maps.Keys(fgComb)) {
+				featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, key, fgComb[key])
 			}
 
-			// set values of cs1 instance so they are stored in checkpoint and can be read by cs2
-			cs1.SetDefaultCPUSet(tc.expectedState.defaultCPUSet)
-			cs1.SetCPUAssignments(tc.expectedState.assignments)
+			for _, tc := range testCases {
+				// verify feature gate requirements for testcase
+				skip := false
+				for fg, requiredState := range tc.fgRequirements {
+					state, exist := fgComb[fg]
+					if !exist || requiredState != state {
+						skip = true
+					}
+				}
+				if skip {
+					continue
+				}
 
-			// restore checkpoint with previously stored values
-			cs2, err := NewCheckpointState(logger, testingDir, testingCheckpoint, "none", nil)
-			if err != nil {
-				t.Fatalf("could not create testing checkpointState instance: %v", err)
+				t.Run(tc.description, func(t *testing.T) {
+					// ensure there is no previous checkpoint
+					cpm.RemoveCheckpoint(testingCheckpoint)
+
+					logger, _ := ktesting.NewTestContext(t)
+					cs1, err := NewCheckpointState(logger, testingDir, testingCheckpoint, "none", nil)
+					if err != nil {
+						t.Fatalf("could not create testing checkpointState instance: %v", err)
+					}
+
+					// set values of cs1 instance so they are stored in checkpoint and can be read by cs2
+					cs1.SetDefaultCPUSet(tc.expectedState.defaultCPUSet)
+					cs1.SetCPUAssignments(tc.expectedState.assignments)
+					cs1.SetCPUOriginals(tc.expectedState.originals)
+
+					// restore checkpoint with previously stored values
+					cs2, err := NewCheckpointState(logger, testingDir, testingCheckpoint, "none", nil)
+					if err != nil {
+						t.Fatalf("could not create testing checkpointState instance: %v", err)
+					}
+
+					AssertStateEqual(t, cs2, tc.expectedState)
+				})
 			}
-
-			AssertStateEqual(t, cs2, tc.expectedState)
 		})
 	}
 }
