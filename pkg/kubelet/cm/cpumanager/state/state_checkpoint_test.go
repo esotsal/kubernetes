@@ -39,7 +39,10 @@ import (
 	"k8s.io/utils/cpuset"
 )
 
-const testingCheckpoint = "cpumanager_checkpoint_test"
+const (
+	testingCheckpoint = "cpumanager_checkpoint_test"
+	StateDir          = "cpumanager_state_test"
+)
 
 type FeatureGateCombination map[featuregate.Feature]bool
 
@@ -941,6 +944,266 @@ func TestCPUManagerCheckpoint_RoundTrip(t *testing.T) {
 			require.NoError(t, tc.restored.VerifyChecksum())
 
 			tc.verify(t, tc.original, tc.restored)
+		})
+	}
+}
+
+func TestSetPodCPUSet(t *testing.T) {
+	testCases := []struct {
+		description        string
+		featureGateEnabled bool
+		cpuSet             []int
+		expected           string
+	}{
+		{
+			description:        "Assign CPUSet to given pod with FG enabled",
+			featureGateEnabled: true,
+			cpuSet:             []int{1, 2, 3, 4, 8},
+			expected:           "1-4,8",
+		},
+		{
+			description:        "Assign CPUSet to given pod with FG disabled",
+			featureGateEnabled: false,
+			cpuSet:             []int{1, 2, 3, 4, 8},
+			expected:           "",
+		},
+	}
+
+	logger, _ := ktesting.NewTestContext(t)
+	tmpDir, err := os.MkdirTemp("", StateDir)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoErrorf(t, os.RemoveAll(tmpDir), "unable to remove dir %s", tmpDir)
+	})
+
+	for _, testCase := range testCases {
+		t.Run(testCase.description, func(t *testing.T) {
+			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.PodLevelResourceManagers, testCase.featureGateEnabled)
+
+			state1, err := NewCheckpointState(logger, tmpDir, testingCheckpoint, "static", containermap.ContainerMap{})
+			require.NoError(t, err)
+
+			state1.SetPodCPUSet("pod1", cpuset.New(testCase.cpuSet...))
+
+			state2, err := NewCheckpointState(logger, tmpDir, testingCheckpoint, "static", containermap.ContainerMap{})
+			require.NoError(t, err)
+
+			actual, _ := state2.GetPodCPUSet("pod1")
+			require.Equal(t, testCase.expected, actual.String())
+		})
+	}
+}
+
+func TestSetPodCPUAssignments(t *testing.T) {
+	testCases := []struct {
+		description        string
+		featureGateEnabled bool
+		podEntries         PodCPUAssignments
+		expected           map[string]string
+	}{
+		{
+			description:        "Assign CPUSet to pods with FG enabled",
+			featureGateEnabled: true,
+			podEntries: PodCPUAssignments{
+				"pod1": {CPUSet: cpuset.New(4, 7)},
+				"pod2": {CPUSet: cpuset.New(1, 2, 3)},
+			},
+			expected: map[string]string{
+				"pod1": "4,7",
+				"pod2": "1-3",
+			},
+		},
+		{
+			description:        "Assign CPUSet to pods with FG disabled",
+			featureGateEnabled: false,
+			podEntries: PodCPUAssignments{
+				"pod1": {CPUSet: cpuset.New(3, 5)},
+			},
+			expected: map[string]string{},
+		},
+	}
+
+	logger, _ := ktesting.NewTestContext(t)
+	tmpDir, err := os.MkdirTemp("", StateDir)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoErrorf(t, os.RemoveAll(tmpDir), "unable to remove dir %s", tmpDir)
+	})
+
+	for _, testCase := range testCases {
+		t.Run(testCase.description, func(t *testing.T) {
+			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.PodLevelResourceManagers, testCase.featureGateEnabled)
+
+			state1, err := NewCheckpointState(logger, tmpDir, testingCheckpoint, "static", containermap.ContainerMap{})
+			require.NoError(t, err)
+
+			state1.SetPodCPUAssignments(testCase.podEntries)
+
+			state2, err := NewCheckpointState(logger, tmpDir, testingCheckpoint, "static", containermap.ContainerMap{})
+			require.NoError(t, err)
+
+			actual := state2.GetPodCPUAssignments()
+			require.Len(t, actual, len(testCase.expected))
+
+			for pod, entry := range actual {
+				require.Equal(t, testCase.expected[pod], entry.CPUSet.String())
+			}
+		})
+	}
+}
+
+func TestGetOriginalCPUSet(t *testing.T) {
+	testCases := []struct {
+		description        string
+		featureGateEnabled bool
+		content            string
+		expected           ContainerCPUOriginals
+	}{
+		{
+			description:        "Get original CPUSet with FG enabled when originals field included",
+			featureGateEnabled: true,
+			content: `{
+				"data": "{\"policyName\":\"static\",\"defaultCPUSet\":\"1-3\",\"entries\":{\"pod\":{\"container\":\"4-5\"}},\"podEntries\":{\"pod\":{\"cpuSet\":\"4-6\"}},\"originals\":{\"pod\":{\"container\":{\"original\":\"5\"}}}}",
+				"dataChecksum": 3481913359
+			}`,
+			expected: ContainerCPUOriginals{
+				"pod": {
+					"container": {
+						Original: cpuset.New(5),
+					},
+				},
+			},
+		},
+		{
+			description:        "Get original CPUSet with FG enabled when originals field excluded",
+			featureGateEnabled: true,
+			content: `{
+				"data": "{\"policyName\":\"static\",\"defaultCPUSet\":\"1-3\",\"entries\":{\"pod\":{\"container\":\"4-5\"}},\"podEntries\":{\"pod\":{\"cpuSet\":\"4-6\"}}}",
+				"dataChecksum": 234652157
+			}`,
+			expected: ContainerCPUOriginals{
+				"pod": {
+					"container": {
+						Original: cpuset.New(4, 5), // Must be equal to value from entries
+					},
+				},
+			},
+		},
+		{
+			description:        "Get original CPUSet with FG disabled",
+			featureGateEnabled: false,
+			content: `{
+				"data": "{\"policyName\":\"static\",\"defaultCPUSet\":\"1-3\",\"entries\":{\"pod\":{\"container\":\"4-5\"}},\"podEntries\":{\"pod\":{\"cpuSet\":\"4-6\"}}}",
+				"dataChecksum": 234652157
+			}`,
+			expected: ContainerCPUOriginals{
+				"pod": {
+					"container": {
+						Original: cpuset.New(),
+					},
+				},
+			},
+		},
+	}
+
+	logger, _ := ktesting.NewTestContext(t)
+	tmpDir, err := os.MkdirTemp("", StateDir)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoErrorf(t, os.RemoveAll(tmpDir), "unable to remove dir %s", tmpDir)
+	})
+
+	cpm, err := checkpointmanager.NewCheckpointManager(tmpDir)
+	require.NoErrorf(t, err, "could not create testing checkpoint manager: %v", err)
+
+	for _, testCase := range testCases {
+		t.Run(testCase.description, func(t *testing.T) {
+			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.InPlacePodVerticalScalingExclusiveCPUs, testCase.featureGateEnabled)
+
+			err = cpm.RemoveCheckpoint(testingCheckpoint)
+			require.NoErrorf(t, err, "could not remove previous checkpoint: %v", err)
+
+			checkpoint := &testutil.MockCheckpoint{Content: testCase.content}
+			err = cpm.CreateCheckpoint(testingCheckpoint, checkpoint)
+			require.NoErrorf(t, err, "could not create testing checkpoint: %v", err)
+
+			state, err := NewCheckpointState(logger, tmpDir, testingCheckpoint, "static", containermap.ContainerMap{})
+			require.NoError(t, err)
+
+			originals, _ := state.GetOriginalCPUSet("pod", "container")
+			require.Equal(t, testCase.expected["pod"]["container"].Original, originals)
+		})
+	}
+}
+
+func TestDeletePod(t *testing.T) {
+	testCases := []struct {
+		description        string
+		featureGateEnabled bool
+		content            string
+		podUIDs            []string // Pods to delete
+		expected           map[string]string
+	}{
+		{
+			description:        "Delete existing pod(s) CPUSet with FG enabled",
+			featureGateEnabled: true,
+			content: `{
+				"data": "{\"policyName\":\"static\",\"defaultCPUSet\":\"1-3\",\"entries\":{\"pod1\":{\"container\":\"4-5\"},\"pod2\":{\"container\":\"7-8\"}},\"podEntries\":{\"pod1\":{\"cpuSet\":\"4-6\"},\"pod2\":{\"cpuSet\":\"7-9\"}}}",
+				"dataChecksum": 2086345991
+			}`,
+			podUIDs: []string{"pod1"},
+			expected: map[string]string{
+				"pod2": "7-9",
+			},
+		},
+		{
+			description:        "Delete nonexisting pod(s) CPUSet with FG enabled",
+			featureGateEnabled: true,
+			content: `{
+				"data": "{\"policyName\":\"static\",\"defaultCPUSet\":\"1-3\",\"entries\":{\"pod1\":{\"container\":\"4-5\"},\"pod2\":{\"container\":\"7-8\"}},\"podEntries\":{\"pod1\":{\"cpuSet\":\"4-6\"},\"pod2\":{\"cpuSet\":\"7-9\"}}}",
+				"dataChecksum": 2086345991
+			}`,
+			podUIDs: []string{"pod3", "pod4"},
+			expected: map[string]string{
+				"pod1": "4-6",
+				"pod2": "7-9",
+			},
+		},
+	}
+
+	logger, _ := ktesting.NewTestContext(t)
+	tmpDir, err := os.MkdirTemp("", StateDir)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoErrorf(t, os.RemoveAll(tmpDir), "unable to remove dir %s", tmpDir)
+	})
+
+	cpm, err := checkpointmanager.NewCheckpointManager(tmpDir)
+	require.NoErrorf(t, err, "could not create testing checkpoint manager: %v", err)
+
+	for _, testCase := range testCases {
+		t.Run(testCase.description, func(t *testing.T) {
+			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.PodLevelResourceManagers, testCase.featureGateEnabled)
+
+			err = cpm.RemoveCheckpoint(testingCheckpoint)
+			require.NoErrorf(t, err, "could not remove previous checkpoint: %v", err)
+
+			checkpoint := &testutil.MockCheckpoint{Content: testCase.content}
+			err = cpm.CreateCheckpoint(testingCheckpoint, checkpoint)
+			require.NoErrorf(t, err, "could not create testing checkpoint: %v", err)
+
+			state, err := NewCheckpointState(logger, tmpDir, testingCheckpoint, "static", containermap.ContainerMap{})
+			require.NoError(t, err)
+
+			for _, uid := range testCase.podUIDs {
+				state.DeletePod(uid)
+			}
+			actual := state.GetPodCPUAssignments()
+
+			require.Len(t, actual, len(testCase.expected))
+			for pod, entry := range actual {
+				require.Equal(t, testCase.expected[pod], entry.CPUSet.String())
+			}
 		})
 	}
 }
