@@ -1086,6 +1086,7 @@ type takeByTopologyTestCaseForResize struct {
 	opts          StaticPolicyOptions
 	availableCPUs cpuset.CPUSet
 	reusableCPUs  cpuset.CPUSet
+	retainedCPUs  *cpuset.CPUSet
 	numCPUs       int
 	expErr        string
 	expResult     cpuset.CPUSet
@@ -1099,6 +1100,7 @@ func commonTakeByTopologyTestCasesForResize(t *testing.T) []takeByTopologyTestCa
 			StaticPolicyOptions{},
 			mustParseCPUSet(t, "1-7"),
 			cpuset.New(0),
+			nil,
 			1,
 			"",
 			cpuset.New(0),
@@ -1109,6 +1111,7 @@ func commonTakeByTopologyTestCasesForResize(t *testing.T) []takeByTopologyTestCa
 			StaticPolicyOptions{},
 			mustParseCPUSet(t, "1-7"),
 			cpuset.New(0),
+			nil,
 			2,
 			"",
 			cpuset.New(0, 4),
@@ -1119,6 +1122,7 @@ func commonTakeByTopologyTestCasesForResize(t *testing.T) []takeByTopologyTestCa
 			StaticPolicyOptions{},
 			mustParseCPUSet(t, "1,3,5,6,7"),
 			cpuset.New(0),
+			nil,
 			2,
 			"",
 			cpuset.New(0, 6),
@@ -1129,6 +1133,7 @@ func commonTakeByTopologyTestCasesForResize(t *testing.T) []takeByTopologyTestCa
 			StaticPolicyOptions{},
 			mustParseCPUSet(t, "1,3,5,6,7"),
 			cpuset.New(0),
+			nil,
 			3,
 			"",
 			cpuset.New(0, 1, 5),
@@ -1139,6 +1144,7 @@ func commonTakeByTopologyTestCasesForResize(t *testing.T) []takeByTopologyTestCa
 			StaticPolicyOptions{},
 			mustParseCPUSet(t, "1-7"),
 			cpuset.New(0),
+			nil,
 			8,
 			"",
 			mustParseCPUSet(t, "0-7"),
@@ -1149,6 +1155,7 @@ func commonTakeByTopologyTestCasesForResize(t *testing.T) []takeByTopologyTestCa
 			StaticPolicyOptions{},
 			mustParseCPUSet(t, "0-10"),
 			cpuset.New(11),
+			nil,
 			2,
 			"",
 			cpuset.New(5, 11),
@@ -1159,6 +1166,7 @@ func commonTakeByTopologyTestCasesForResize(t *testing.T) []takeByTopologyTestCa
 			StaticPolicyOptions{},
 			mustParseCPUSet(t, "0-10"),
 			cpuset.New(11),
+			nil,
 			6,
 			"",
 			cpuset.New(1, 3, 5, 7, 9, 11),
@@ -1169,6 +1177,7 @@ func commonTakeByTopologyTestCasesForResize(t *testing.T) []takeByTopologyTestCa
 			StaticPolicyOptions{},
 			mustParseCPUSet(t, "0-10"),
 			cpuset.New(11),
+			nil,
 			8,
 			"",
 			cpuset.New(0, 1, 3, 5, 6, 7, 9, 11),
@@ -1179,6 +1188,7 @@ func commonTakeByTopologyTestCasesForResize(t *testing.T) []takeByTopologyTestCa
 			StaticPolicyOptions{},
 			mustParseCPUSet(t, "0-38,40-79"),
 			cpuset.New(39),
+			nil,
 			40,
 			"",
 			mustParseCPUSet(t, "20-39,60-79"),
@@ -1189,6 +1199,7 @@ func commonTakeByTopologyTestCasesForResize(t *testing.T) []takeByTopologyTestCa
 			StaticPolicyOptions{},
 			mustParseCPUSet(t, "0-38,40-79"),
 			cpuset.New(39),
+			nil,
 			20,
 			"",
 			mustParseCPUSet(t, "30-39,70-79"),
@@ -1199,6 +1210,7 @@ func commonTakeByTopologyTestCasesForResize(t *testing.T) []takeByTopologyTestCa
 			StaticPolicyOptions{},
 			mustParseCPUSet(t, "0-38,40-58,60-79"),
 			cpuset.New(39, 59),
+			nil,
 			60,
 			"",
 			mustParseCPUSet(t, "0-19,30-59,70-79"),
@@ -1209,6 +1221,7 @@ func commonTakeByTopologyTestCasesForResize(t *testing.T) []takeByTopologyTestCa
 			StaticPolicyOptions{},
 			mustParseCPUSet(t, "0-38,40-69"),
 			cpuset.New(39),
+			nil,
 			40,
 			"",
 			mustParseCPUSet(t, "0-8,20-30,39-48,60-69"),
@@ -1219,6 +1232,7 @@ func commonTakeByTopologyTestCasesForResize(t *testing.T) []takeByTopologyTestCa
 			StaticPolicyOptions{},
 			mustParseCPUSet(t, "9,30-38,49"),
 			cpuset.New(),
+			nil,
 			1,
 			"",
 			mustParseCPUSet(t, "9"),
@@ -1229,6 +1243,7 @@ func commonTakeByTopologyTestCasesForResize(t *testing.T) []takeByTopologyTestCa
 			StaticPolicyOptions{},
 			mustParseCPUSet(t, "0-38,40-69"),
 			cpuset.New(39),
+			nil,
 			41,
 			"",
 			mustParseCPUSet(t, "0-19,39-59"),
@@ -1239,6 +1254,7 @@ func commonTakeByTopologyTestCasesForResize(t *testing.T) []takeByTopologyTestCa
 			StaticPolicyOptions{DistributeCPUsAcrossCores: true},
 			mustParseCPUSet(t, "0-6"),
 			cpuset.New(7),
+			nil,
 			3,
 			"",
 			mustParseCPUSet(t, "0,1,7"),
@@ -1249,6 +1265,7 @@ func commonTakeByTopologyTestCasesForResize(t *testing.T) []takeByTopologyTestCa
 			StaticPolicyOptions{DistributeCPUsAcrossCores: true},
 			mustParseCPUSet(t, "0-10"),
 			cpuset.New(11),
+			nil,
 			3,
 			"",
 			mustParseCPUSet(t, "1,3,11"),
@@ -1259,6 +1276,7 @@ func commonTakeByTopologyTestCasesForResize(t *testing.T) []takeByTopologyTestCa
 			StaticPolicyOptions{DistributeCPUsAcrossCores: true},
 			mustParseCPUSet(t, "0-10"),
 			cpuset.New(11),
+			nil,
 			6,
 			"",
 			mustParseCPUSet(t, "1,3,5,7,9,11"),
@@ -1269,6 +1287,7 @@ func commonTakeByTopologyTestCasesForResize(t *testing.T) []takeByTopologyTestCa
 			StaticPolicyOptions{DistributeCPUsAcrossCores: true},
 			mustParseCPUSet(t, "0-10"),
 			cpuset.New(11),
+			nil,
 			8,
 			"",
 			mustParseCPUSet(t, "0,1,2,3,5,7,9,11"),
@@ -1279,6 +1298,7 @@ func commonTakeByTopologyTestCasesForResize(t *testing.T) []takeByTopologyTestCa
 			StaticPolicyOptions{DistributeCPUsAcrossCores: true},
 			mustParseCPUSet(t, "0-6"),
 			cpuset.New(7),
+			nil,
 			2,
 			"",
 			mustParseCPUSet(t, "4,7"),
@@ -1289,6 +1309,7 @@ func commonTakeByTopologyTestCasesForResize(t *testing.T) []takeByTopologyTestCa
 			StaticPolicyOptions{DistributeCPUsAcrossCores: true},
 			mustParseCPUSet(t, "0-38,40-79"),
 			cpuset.New(39),
+			nil,
 			8,
 			"",
 			mustParseCPUSet(t, "20-26,39"),
@@ -1299,6 +1320,7 @@ func commonTakeByTopologyTestCasesForResize(t *testing.T) []takeByTopologyTestCa
 			StaticPolicyOptions{DistributeCPUsAcrossCores: true},
 			mustParseCPUSet(t, "0-38,40-69"),
 			cpuset.New(39),
+			nil,
 			40,
 			"",
 			mustParseCPUSet(t, "0-9,20-39,60-69"),
@@ -1309,6 +1331,7 @@ func commonTakeByTopologyTestCasesForResize(t *testing.T) []takeByTopologyTestCa
 			StaticPolicyOptions{DistributeCPUsAcrossCores: true},
 			mustParseCPUSet(t, "0-59,61-287"),
 			cpuset.New(60),
+			nil,
 			8,
 			"",
 			mustParseCPUSet(t, "3,4,11,12,15,16,23,60"),
@@ -1319,6 +1342,7 @@ func commonTakeByTopologyTestCasesForResize(t *testing.T) []takeByTopologyTestCa
 			StaticPolicyOptions{PreferAlignByUncoreCacheOption: true},
 			mustParseCPUSet(t, "2-3,10-11,4-7,12-15"),
 			cpuset.New(8, 9),
+			nil,
 			8,
 			"",
 			cpuset.New(4, 5, 6, 7, 8, 9, 10, 11),
@@ -1329,9 +1353,43 @@ func commonTakeByTopologyTestCasesForResize(t *testing.T) []takeByTopologyTestCa
 			StaticPolicyOptions{PreferAlignByUncoreCacheOption: true},
 			mustParseCPUSet(t, "0-3,7-15"),
 			cpuset.New(4, 5, 6),
+			nil,
 			8,
 			"",
 			cpuset.New(4, 5, 6, 7, 12, 13, 14, 15),
+		},
+		{
+			"Scale down from 3 to 2 CPUs with retained CPUs being subset of reusable CPUs",
+			topoTripleSocketHT,
+			StaticPolicyOptions{},
+			mustParseCPUSet(t, "3-17"),
+			cpuset.New(0, 1, 2),
+			newCPUSetPtr(0, 1),
+			2,
+			"",
+			cpuset.New(0, 1),
+		},
+		{
+			"Scale down from 2 to 1 CPU with retained CPUs not being subset of reusable CPUs",
+			topoTripleSocketHT,
+			StaticPolicyOptions{},
+			mustParseCPUSet(t, "1-3,5-17"),
+			cpuset.New(0, 4),
+			newCPUSetPtr(5),
+			1,
+			"requested CPUs to be retained 5 are not a subset of reusable CPUs 0,4",
+			cpuset.New(),
+		},
+		{
+			"Allocated 1 CPU, take 11 CPUs which exceedes the available pool",
+			topoSingleSocketHT,
+			StaticPolicyOptions{},
+			mustParseCPUSet(t, "1-7"),
+			cpuset.New(0),
+			nil,
+			11,
+			"not enough cpus available to satisfy request: requested=11, available=7",
+			cpuset.New(),
 		},
 	}
 }
@@ -1347,13 +1405,12 @@ func TestTakeByTopologyNUMAPackedForResize(t *testing.T) {
 				strategy = CPUSortingStrategySpread
 			}
 
-			result, err := takeByTopologyNUMAPackedForResize(logger, tc.topo, tc.availableCPUs, tc.numCPUs, strategy, tc.opts.PreferAlignByUncoreCacheOption, &tc.reusableCPUs, nil)
-
-			if tc.expErr != "" && err != nil && err.Error() != tc.expErr {
+			result, err := takeByTopologyNUMAPackedForResize(logger, tc.topo, tc.availableCPUs, tc.numCPUs, strategy, tc.opts.PreferAlignByUncoreCacheOption, &tc.reusableCPUs, tc.retainedCPUs)
+			if (err != nil && err.Error() != tc.expErr) || (err == nil && tc.expErr != "") {
 				t.Errorf("expected error to be [%v] but it was [%v]", tc.expErr, err)
 			}
 			if !result.Equals(tc.expResult) {
-				t.Errorf("expected result [%s] to equal [%s]", result, tc.expResult)
+				t.Errorf("expected result [%s] to equal [%s]", tc.expResult, result)
 			}
 		})
 	}
@@ -1541,6 +1598,26 @@ func commonTakeByTopologyExtendedTestCasesForResize(t *testing.T) []takeByTopolo
 			2,
 			"",
 			mustParseCPUSet(t, "20-25,30-36,60-65,70-76"),
+		},
+		{
+			"Allocated 2 CPUs, allocate 12 full cores distributed across the 2 NUMA nodes",
+			topoDualSocketMultiNumaPerSocketHT,
+			mustParseCPUSet(t, "0-12,14-52,54-79"),
+			mustParseCPUSet(t, "13,53"),
+			24,
+			2,
+			"",
+			mustParseCPUSet(t, "0-5,10-15,40-45,50-55"),
+		},
+		{
+			"Allocated 2 CPUs, allocate 12 full cores packed into the 2 NUMA nodes",
+			topoDualSocketMultiNumaPerSocketHT,
+			mustParseCPUSet(t, "0-12,14-52,54-79"),
+			mustParseCPUSet(t, "13,53"),
+			24,
+			5, // Fallback to packing algorithm
+			"",
+			mustParseCPUSet(t, "0-1,10-19,40-41,50-59"),
 		},
 	}
 }
